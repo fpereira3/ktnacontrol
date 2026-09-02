@@ -4,7 +4,17 @@
     <!-- Pantalla de diagnóstico de conexión USB -->
     <string name="debug_connection_title">Diagnóstico de conexión USB</string>
     <string name="debug_connection_scan">Buscar dispositivo</string>
+    <string name="debug_connection_handshake">Enviar Handshake</string>
     <string name="debug_connection_identity_request">Enviar Identity Request</string>
+    <string name="debug_connection_read_device_name">Leer nombre del dispositivo</string>
+    <string name="debug_connection_read_preset_names">Leer nombres de presets</string>
+    <string name="debug_connection_edit_mode_on">Edit Mode ON</string>
+    <string name="debug_connection_edit_mode_off">Edit Mode OFF</string>
+    <string name="debug_connection_read_memory_dump">Leer dump de memoria</string>
+    <string name="debug_connection_reverb_level">Reverb level: %1$s</string>
+    <string name="debug_connection_unknown_value">—</string>
+    <string name="debug_connection_read_reverb_level">Leer reverb level (GET)</string>
+    <string name="debug_connection_log_copied">Log copiado</string>
     <string name="debug_connection_empty_log">Sin actividad todavía.</string>
     <string name="debug_connection_state_idle">Sin conectar</string>
     <string name="debug_connection_state_scanning">Buscando…</string>

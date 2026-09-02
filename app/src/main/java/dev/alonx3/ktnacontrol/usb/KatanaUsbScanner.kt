@@ -30,31 +30,59 @@ class KatanaUsbScanner(context: Context) {
     /** Emits once per answered permission dialog. */
     val permissionResults: SharedFlow<PermissionResult> = _permissionResults.asSharedFlow()
 
+    private val _deviceEvents = MutableSharedFlow<UsbDeviceEvent>(extraBufferCapacity = 8)
+
+    /** Emits when a USB device is plugged in or unplugged while the app is running. */
+    val deviceEvents: SharedFlow<UsbDeviceEvent> = _deviceEvents.asSharedFlow()
+
     private var receiverRegistered = false
 
-    private val permissionReceiver = object : BroadcastReceiver() {
+    private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != ACTION_USB_PERMISSION) return
+            val action = intent?.action ?: return
             val device = IntentCompat.getParcelableExtra(
                 intent,
                 UsbManager.EXTRA_DEVICE,
                 UsbDevice::class.java,
             )
-            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-            _permissionResults.tryEmit(PermissionResult(device, granted))
+            when (action) {
+                ACTION_USB_PERMISSION -> {
+                    val granted =
+                        intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    _permissionResults.tryEmit(PermissionResult(device, granted))
+                }
+
+                UsbManager.ACTION_USB_DEVICE_ATTACHED ->
+                    device?.let { _deviceEvents.tryEmit(UsbDeviceEvent.Attached(it)) }
+
+                UsbManager.ACTION_USB_DEVICE_DETACHED ->
+                    device?.let { _deviceEvents.tryEmit(UsbDeviceEvent.Detached(it)) }
+            }
         }
     }
 
     /** Whether this device exposes a USB host stack at all. */
     val isSupported: Boolean get() = usbManager != null
 
-    /** Starts listening for permission-dialog answers. Idempotent. */
+    /**
+     * Starts listening for permission-dialog answers and for devices being plugged in or
+     * unplugged. Idempotent.
+     *
+     * `ATTACHED` / `DETACHED` are protected system broadcasts, so they reach a
+     * `RECEIVER_NOT_EXPORTED` receiver just fine. The manifest intent-filter is a different
+     * thing: it launches the app when the amp is connected while it is *not* running.
+     */
     fun start() {
         if (receiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(ACTION_USB_PERMISSION)
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
         ContextCompat.registerReceiver(
             appContext,
-            permissionReceiver,
-            IntentFilter(ACTION_USB_PERMISSION),
+            usbReceiver,
+            filter,
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         receiverRegistered = true
@@ -99,7 +127,7 @@ class KatanaUsbScanner(context: Context) {
     /** Stops listening. Call from `onCleared`. */
     fun close() {
         if (!receiverRegistered) return
-        runCatching { appContext.unregisterReceiver(permissionReceiver) }
+        runCatching { appContext.unregisterReceiver(usbReceiver) }
         receiverRegistered = false
     }
 
@@ -109,6 +137,17 @@ class KatanaUsbScanner(context: Context) {
     private companion object {
         const val ACTION_USB_PERMISSION = "dev.alonx3.ktnacontrol.USB_PERMISSION"
     }
+}
+
+/**
+ * A device appearing or disappearing while the app is running.
+ *
+ * Not `data class`es: [UsbDevice] has identity equality, so the generated `equals` would be
+ * misleading.
+ */
+sealed interface UsbDeviceEvent {
+    class Attached(val device: UsbDevice) : UsbDeviceEvent
+    class Detached(val device: UsbDevice) : UsbDeviceEvent
 }
 
 /**

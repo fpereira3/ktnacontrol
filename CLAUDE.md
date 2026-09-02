@@ -19,14 +19,25 @@ condiciona la arquitectura de esta app.
 
 ## 2. Estado actual
 
+- [usb/](app/src/main/java/dev/alonx3/ktnacontrol/usb/) — **transporte funcionando y
+  verificado contra el amplificador real** (§4.1): `KatanaUsbScanner` (enumerar, permiso),
+  `KatanaUsbTransport` (`claimInterface(3)`, bulk sobre `0x03`/`0x84`, handshake) y
+  `UsbMidiPacket` (empaquetado de 4 bytes, con tests JVM).
+- [protocol/](app/src/main/java/dev/alonx3/ktnacontrol/protocol/) — Kotlin puro, con tests
+  JVM y **verificado contra el amplificador real**: `MidiBytes` (7 bits), `Address`,
+  `RolandSysEx` (GET/SET, checksum, parseo), `SysExFramer`, `RolandExchange`
+  (petición↔respuesta correlada por dirección) y `KatanaAddresses`.
 - [ui/screens/DebugConnectionScreen.kt](app/src/main/java/dev/alonx3/ktnacontrol/ui/screens/DebugConnectionScreen.kt)
-  — pantalla de diagnóstico: botón de búsqueda y consola con log y autoscroll. Se conserva.
-- [midi/](app/src/main/java/dev/alonx3/ktnacontrol/midi/) — ⚠️ **implementación descartada**.
-  Usa `android.media.midi.MidiManager`, que nunca verá el amplificador (§4.1). Queda como
-  referencia hasta que se reescriba el transporte sobre `UsbManager`; no construir encima.
-- Nada del protocolo SysEx está implementado todavía.
-
-Todo lo de la sección 4 sigue siendo diseño a implementar.
+  — pantalla de diagnóstico, que funciona como **monitor en vivo**: se conecta sola al
+  enchufar el amp, registra todo lo que llega, y tiene botones para handshake, Identity
+  Request, nombre del dispositivo, nombres de preset y edit mode.
+- [device/](app/src/main/java/dev/alonx3/ktnacontrol/device/) — `KatanaLink` (puerto estrecho
+  para poder testear con un falso) y `KatanaRepository`, de momento con **un solo parámetro**:
+  el nivel de reverb, con lectura, escritura optimista y actualización desde los mensajes
+  espontáneos. Confirmado con audio real.
+- El paquete `midi/` (enfoque `MidiManager`) está **eliminado**; ver §4.1 para el porqué.
+- **Falta**: los otros parámetros (ver el proceso en §5), el anti-flood con debounce de
+  ~100 ms, el parseo del dump en parámetros, y la UI real de control.
 
 ## 3. Build
 
@@ -106,6 +117,21 @@ Un SysEx de N bytes se trocea en paquetes de 3 bytes de payload cada uno. Los CI
 Esto es **capa de transporte, no capa SysEx**: `protocol/` sigue trabajando con mensajes
 `F0…F7` limpios, y empaquetar/desempaquetar es responsabilidad de `usb/`.
 
+✅ **Verificado contra el amplificador real** (2026-09-02). Un Identity Request universal
+empaquetado obtuvo respuesta bien formada:
+
+```
+envío    sysex: F0 7E 7F 06 01 F7
+         wire:  04 F0 7E 7F 07 06 01 F7                    (8 bytes escritos)
+respuesta wire: 20 bytes
+    desempaquetado: F0 7E 00 06 02 41 33 03 00 00 06 00 00 00 F7
+```
+
+Es un Identity Reply estándar, idéntico al que documenta
+[HOW.md](reference/TuxKatana/HOW.md). Valida de una sola vez la interfaz y los endpoints
+(3, `0x03`/`0x84`), el empaquetado `packUsbMidi`/`unpackUsbMidi`, y que el amplificador
+atiende a broadcast (device ID `7F`) e identifica su model id como `33` — el mismo de §5.
+
 #### Handshake obligatorio antes de cualquier comando
 
 También de `MS3.h` / `setEditorMode()`: el amplificador **no responde a nada** hasta recibir
@@ -116,15 +142,32 @@ un mensaje de handshake fijo, enviado **dos veces seguidas** con un pequeño del
 F0 7E 00 06 02 41 3B 03 00 00 00 00 00 00 F7
 ```
 
-Esto **no** es el Identity Request universal (`F0 7E 7F 06 01 F7`), que se probó como primer
-contacto sin éxito. El Identity Request sigue siendo válido, pero como paso *posterior* al
-handshake, no como saludo inicial.
+Esos bytes tienen la forma de un Identity *Reply* (`F0 7E <dev> 06 02 <fabricante> <modelo>
+…`), y `3B` es el model id del **MS-3**; el del Katana es `33`, así que en este proyecto se
+envía con `33`.
 
-⚠️ **A verificar**: esos bytes tienen la forma de un Identity *Reply* (`F0 7E <dev> 06 02
-<fabricante> <modelo> …`), y `3B` es el model id del **MS-3**. El del Katana es `33`
-(katana_sysex.txt usa model ID `00 00 00 33`, y la respuesta real del Katana que documenta
-[HOW.md](reference/TuxKatana/HOW.md) empieza por `41 33 03 …`). Si el handshake literal no
-funciona, lo primero que hay que probar es la misma trama con `33` en lugar de `3B`.
+⚠️ **Probado el 2026-09-02 con `33`: el amplificador no responde nada**, ni al primer envío,
+ni al segundo, ni con una lectura posterior de un segundo. Esto **no** invalida el
+transporte: en esa misma sesión el Identity Request sí obtuvo respuesta (más arriba).
+
+**Descartada la hipótesis que lo ligaba al edit mode.** Se pensó que el handshake sería lo
+que activaba el modo de edición sin confirmar; ya no: el edit mode se activa con su propio
+SET a `7F 00 00 01` y eso está confirmado funcionando (§5). Así que el silencio del
+handshake es una **duda aparte y sin relación**, de baja prioridad y no bloqueante — hasta
+ahora nada de lo implementado lo ha necesitado.
+
+Un detalle que puede ser la pista: la trama que enviamos difiere del Identity Reply real del
+amplificador **en un solo byte**, el de la versión de firmware:
+
+```
+respuesta real del amp: F0 7E 00 06 02 41 33 03 00 00 06 00 00 00 F7
+handshake que enviamos: F0 7E 00 06 02 41 33 03 00 00 00 00 00 00 F7
+                                                    ↑ 06 vs 00
+```
+
+Según [HOW.md](reference/TuxKatana/HOW.md) ese campo es la versión de firmware
+(`00 06 00 00`). Si alguna vez hace falta que el handshake provoque respuesta, probar con
+los bytes de versión reales es lo primero.
 
 **Por qué las apps de escritorio sí funcionan.** En Linux, `snd-usb-audio` trae quirks para
 dispositivos Roland/Boss que exponen estas interfaces vendor-specific como puertos ALSA MIDI
@@ -184,10 +227,16 @@ Reglas:
   evitar bucles de eco: al aplicar un mensaje entrante no se reenvía al amp.
 - **Anti-flood**: arrastrar un slider genera decenas de eventos. Coalescer por dirección con un
   debounce de ~100 ms antes de enviar (TuxKatana hace exactamente esto en `lib/anti_flood.py`).
-- **Edit mode** (`7F 00 00 01 → 01`): con él activo el amp reporta los parámetros que cambian
-  de forma derivada, lo que da una UI mucho más fiel. TuxKatana lo mantiene siempre encendido y
-  advierte de guardar los presets antes, porque altera el estado del amp. Tratarlo como un ajuste
-  explícito y visible, no como algo silencioso.
+- **Edit mode** (`7F 00 00 01 → 01`): ✅ **confirmado contra el amplificador real**
+  (2026-09-02). Sin él, mover una perilla física del Katana **no** genera ningún mensaje;
+  con él activo, **sí** los genera y el bucle de lectura los recibe. Es lo que hace que el
+  amp reporte cambios derivados, así que **debe activarse como parte del flujo normal de
+  conexión**, no solo desde el botón de diagnóstico: sin eso la UI nunca vería lo que se
+  toca en el propio amplificador.
+  - Es *fire-and-forget* (semántica DT1 de Roland): no devuelve confirmación por SysEx.
+  - Altera el estado del amp y TuxKatana advierte de guardar los presets antes, así que
+    tratarlo como un ajuste explícito y visible, nunca como algo silencioso — y ofrecer
+    siempre la forma de desactivarlo.
 
 **Notas de `android.hardware.usb` concretas para este proyecto:**
 
@@ -260,6 +309,43 @@ Direcciones clave:
 | `00 01 00 00` | Preset actual / recall (`00` panel, `01`..`04` canales) |
 | `00 02 00 00` | Canal MIDI (`00`..`0F`) |
 | `10 00`–`10 04 xx xx` | Bloques Panel / Ch1–Ch4 |
+
+### ⚠️ Las direcciones por parámetro del MK1 NO valen para el Mk2
+
+`katana_sysex.txt` dice en su primera línea **"Boss Katana 100 Combo — v1.7 - 2017-03-23"**:
+documenta el **MK1**. Su formato de mensaje, checksum y las direcciones "de sistema"
+(`10 xx`, `60 00 00 00`, `7F 00 00 01`) sí valen y están verificadas contra el Mk2. Pero
+**el mapa de parámetros por efecto es distinto** y no se puede copiar.
+
+Para direcciones de parámetros, las fuentes de Mk2 son `reference/TuxKatana/params/*.yaml`,
+`reference/TuxKatana/doc/Adresses.txt` y `reference/FxFloorboard/midi.xml`.
+
+#### Cómo encontrar la dirección de un parámetro (proceso, no atajo)
+
+El nivel de reverb costó **tres candidatas** y solo el oído las distinguió:
+
+| Candidata | Fuente | Resultado real |
+| --- | --- | --- |
+| `60 00 06 18` | katana_sysex.txt (MK1) | ❌ nada: ni sonido ni estado; el GET devuelve `07` fijo |
+| `60 00 05 48` | reverb.yaml:17, sección `SEND` | ❌ escribir no hace nada; sí **reporta** un valor derivado y retardado |
+| **`60 00 06 5B`** | reverb.yaml:19, sección `SEND` | ✅ **lectura y escritura**, cambio audible |
+
+Lecciones, que aplican a los cinco efectos que quedan:
+
+- **Que una fuente de Mk2 liste una dirección bajo `SEND` no basta.** `60 00 05 48` lo está
+  y no funciona. En `set_mapping.py:39-43` TuxKatana fusiona `SEND` y `RECV` en el mismo
+  mapa, así que esa separación es organizativa, no semántica.
+- **La única prueba que vale es el audio.** Checksum correcto, bytes bien formados y una
+  respuesta al GET no demuestran nada: `60 00 06 18` cumplía las tres cosas.
+- **Prueba mínima**: SET a los extremos (0 y 100) → ¿cambia el sonido? Luego GET a la misma
+  dirección → ¿cambió el estado? Y mover la perilla física → ¿reporta por esa dirección?
+- **No hay un patrón fiable "escritura baja / reporte alto".** `Adresses.txt` empareja cada
+  efecto con una dirección baja y una del bloque `60 00 06 5x`, y para reverb resultó ser la
+  **alta** la de control. Las bajas siguen siendo candidatas legítimas a probar primero
+  —están citadas como `SEND`— pero **cada parámetro se prueba por separado**:
+  Presence `60 00 00 27` / `60 00 06 56`, Boost `60 00 00 12` / `60 00 06 57`,
+  Mod `60 00 02 38` / `60 00 06 58`, FX `60 00 04 14` / `60 00 06 59`,
+  Delay `60 00 05 06` / `60 00 06 5A`.
 
 También responde a **Program Change** (0–8: BANK_A CH1-4, PANEL, BANK_B CH1-4) y a
 **Control Change** (CC16 booster, CC17 mod, CC18 fx, CC19 delay, CC20 reverb, CC7 volumen global),

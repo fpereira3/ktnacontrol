@@ -50,12 +50,6 @@ object KatanaHandshake {
     /** Gap between the two sends, as in the reference library. */
     const val GAP_MS = 4L
 
-    /**
-     * Read timeout used between the two sends. Deliberately tiny: a long read there would
-     * stretch the [GAP_MS] gap into something the amp may not accept.
-     */
-    const val SHORT_READ_TIMEOUT_MS = 5
-
     /** `F0 7E 00 06 02 41 <modelId> 03 00 00 00 00 00 00 F7` — 15 bytes. */
     fun message(modelId: Byte = MODEL_ID_KATANA): ByteArray = byteArrayOf(
         0xF0.toByte(), 0x7E, 0x00, 0x06, 0x02, 0x41, modelId, 0x03,

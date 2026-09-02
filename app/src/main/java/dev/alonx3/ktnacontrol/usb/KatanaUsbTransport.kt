@@ -5,27 +5,19 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import dev.alonx3.ktnacontrol.protocol.SysExFramer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 
 /** Outcome of opening the transport; errors are values, not exceptions (CLAUDE.md §6). */
 sealed interface UsbOpenResult {
     data class Success(val transport: KatanaUsbTransport) : UsbOpenResult
     data class Failure(val reason: String) : UsbOpenResult
-}
-
-/**
- * What one of the two handshake sends produced.
- *
- * Not a `data class`: it holds a [ByteArray], whose identity-based `equals` would make the
- * generated one misleading.
- */
-class HandshakeAttempt(
-    val attempt: Int,
-    val written: Int,
-    val wireResponse: ByteArray,
-) {
-    /** [wireResponse] with the USB-MIDI packet framing removed. */
-    val sysexResponse: ByteArray get() = unpackUsbMidi(wireResponse)
 }
 
 /**
@@ -86,36 +78,54 @@ class KatanaUsbTransport private constructor(
         unpackUsbMidi(receiveWire(timeoutMs))
 
     /**
-     * Sends the mandatory handshake — the frame twice in a row, [KatanaHandshake.GAP_MS]
-     * apart — and reports what came back after each send.
+     * A stream of complete `F0…F7` messages arriving from the amp, already unpacked.
      *
-     * Until this succeeds the amp ignores every other command, so it belongs before any
-     * Identity Request or SysEx query.
+     * Runs a read loop on `Dispatchers.IO`: `bulkTransfer` blocks for at most [timeoutMs]
+     * and returns -1 when nothing showed up, which is the normal idle case — the loop keeps
+     * listening rather than treating it as an error or a disconnection. Whatever does arrive
+     * goes through [unpackUsbMidi] and then a [SysExFramer], because one transfer may carry
+     * half a message or several of them.
+     *
+     * Collect this from the moment the transport opens: the amp also talks unprompted (front
+     * panel knobs, derived parameters), and those messages arrive here just the same.
+     *
+     * The flow ends on its own when [close] is called, and cancelling the collecting
+     * coroutine stops it after at most [timeoutMs].
+     */
+    fun incomingMessages(timeoutMs: Int = READ_LOOP_TIMEOUT_MS): Flow<ByteArray> = flow {
+        val framer = SysExFramer()
+        while (currentCoroutineContext().isActive && !closed) {
+            val wire = receiveWire(timeoutMs)
+            if (wire.isEmpty()) continue // Timeout: nothing to read, keep listening.
+            framer.feed(unpackUsbMidi(wire)).forEach { message -> emit(message) }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Sends the mandatory handshake: the frame twice in a row, [KatanaHandshake.GAP_MS]
+     * apart. Until this succeeds the amp ignores every other command, so it belongs before
+     * any Identity Request or SysEx query.
+     *
+     * Only sends — anything the amp replies arrives through [incomingMessages], which is the
+     * single reader of the endpoint.
      *
      * `suspend` on purpose: the gap between the two sends is part of the protocol, and
-     * `delay` keeps it without blocking a thread. The read between the two sends uses
-     * [KatanaHandshake.SHORT_READ_TIMEOUT_MS] precisely so that peeking at the answer does
-     * not stretch that gap — the trade-off is that a slow first reply will be missed here
-     * and show up on the next read instead.
+     * `delay` keeps it without blocking a thread.
+     *
+     * @return bytes written on the wire by each of the two sends.
      */
     suspend fun sendHandshake(
         modelId: Byte = KatanaHandshake.MODEL_ID_KATANA,
-    ): List<HandshakeAttempt> {
+    ): List<Int> {
         val message = KatanaHandshake.message(modelId)
-        val attempts = ArrayList<HandshakeAttempt>(KatanaHandshake.REPEAT_COUNT)
+        val written = ArrayList<Int>(KatanaHandshake.REPEAT_COUNT)
         repeat(KatanaHandshake.REPEAT_COUNT) { index ->
-            val written = sendRaw(message)
-            val response = receiveWire(KatanaHandshake.SHORT_READ_TIMEOUT_MS)
-            attempts += HandshakeAttempt(
-                attempt = index + 1,
-                written = written,
-                wireResponse = response,
-            )
+            written += sendRaw(message)
             if (index < KatanaHandshake.REPEAT_COUNT - 1) {
                 delay(KatanaHandshake.GAP_MS)
             }
         }
-        return attempts
+        return written
     }
 
     /** Releases the interface and the device connection. Idempotent. */
@@ -129,6 +139,13 @@ class KatanaUsbTransport private constructor(
     companion object {
         /** Long enough for the amp to answer, short enough not to freeze a read loop. */
         const val DEFAULT_TIMEOUT_MS = 1_000
+
+        /**
+         * Poll interval of [incomingMessages]. `bulkTransfer` blocks for this long when
+         * there is nothing to read, so it is not a busy loop; it also bounds how long
+         * cancelling the collector takes to take effect.
+         */
+        const val READ_LOOP_TIMEOUT_MS = 100
 
         /**
          * Claims the control interface of [device] and resolves both bulk endpoints.
