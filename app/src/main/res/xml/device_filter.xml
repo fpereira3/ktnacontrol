@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Filtro de dispositivos USB para el intent-filter USB_DEVICE_ATTACHED de MainActivity.
+
+  Ojo: vendor-id y product-id se declaran en DECIMAL, no en hexadecimal.
+    vendor-id  1410 = 0x0582 (Roland)
+    product-id  472 = 0x01D8 (Boss Katana MK2)
+
+  Al hacer match, Android ofrece la app al conectar el amplificador; si el usuario marca
+  "usar por defecto", el permiso USB queda concedido sin volver a preguntar.
+-->
+<resources>
+    <usb-device vendor-id="1410" product-id="472" />
+</resources>

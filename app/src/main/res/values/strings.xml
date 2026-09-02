@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">KTNA Control</string>
+
+    <!-- Pantalla de diagnóstico de conexión USB -->
+    <string name="debug_connection_title">Diagnóstico de conexión USB</string>
+    <string name="debug_connection_scan">Buscar dispositivo</string>
+    <string name="debug_connection_identity_request">Enviar Identity Request</string>
+    <string name="debug_connection_empty_log">Sin actividad todavía.</string>
+    <string name="debug_connection_state_idle">Sin conectar</string>
+    <string name="debug_connection_state_scanning">Buscando…</string>
+    <string name="debug_connection_state_not_found">Katana no encontrado</string>
+    <string name="debug_connection_state_permission">Esperando permiso USB…</string>
+    <string name="debug_connection_state_connected">Conectado a %1$s</string>
+    <string name="debug_connection_state_failed">Error: %1$s</string>
+</resources>
