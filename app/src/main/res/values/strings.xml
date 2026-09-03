@@ -2,18 +2,31 @@
     <string name="app_name">KTNA Control</string>
 
     <!-- Pantalla de diagnóstico de conexión USB -->
-    <string name="debug_connection_title">Diagnóstico de conexión USB</string>
-    <string name="debug_connection_scan">Buscar dispositivo</string>
-    <string name="debug_connection_handshake">Enviar Handshake</string>
-    <string name="debug_connection_identity_request">Enviar Identity Request</string>
-    <string name="debug_connection_read_device_name">Leer nombre del dispositivo</string>
-    <string name="debug_connection_read_preset_names">Leer nombres de presets</string>
-    <string name="debug_connection_edit_mode_on">Edit Mode ON</string>
-    <string name="debug_connection_edit_mode_off">Edit Mode OFF</string>
-    <string name="debug_connection_read_memory_dump">Leer dump de memoria</string>
-    <string name="debug_connection_reverb_level">Reverb level: %1$s</string>
+    <string name="debug_connection_section_logs">Logs</string>
+    <string name="debug_connection_section_sliders">Sliders</string>
+    <!-- Glifo del menú hamburguesa: evita depender de material-icons solo por un icono. -->
+    <string name="debug_connection_menu">\u2630</string>
+    <string name="debug_connection_scan">Buscar</string>
+    <string name="debug_connection_handshake">Handshake</string>
+    <string name="debug_connection_identity_request">Identity</string>
+    <string name="debug_connection_read_device_name">Nombre</string>
+    <string name="debug_connection_read_preset_names">Presets</string>
+    <string name="debug_connection_edit_mode">Edit Mode</string>
+    <string name="debug_connection_read_memory_dump">Dump</string>
+    <string name="debug_connection_gain_level">Gain: %1$s</string>
+    <string name="debug_connection_volume_level">Volume: %1$s</string>
+    <string name="debug_connection_bass_level">Bass: %1$s</string>
+    <string name="debug_connection_middle_level">Middle: %1$s</string>
+    <string name="debug_connection_treble_level">Treble: %1$s</string>
+    <string name="debug_connection_reverb_level">Reverb: %1$s</string>
     <string name="debug_connection_unknown_value">—</string>
-    <string name="debug_connection_read_reverb_level">Leer reverb level (GET)</string>
+    <string name="debug_connection_presence_level">Presence: %1$s</string>
+    <string name="debug_connection_boost_level">Boost: %1$s</string>
+    <string name="debug_connection_mod_level">Mod: %1$s</string>
+    <string name="debug_connection_fx_level">FX: %1$s</string>
+    <string name="debug_connection_delay_level">Delay: %1$s</string>
+    <!-- Botón junto a cada slider: relee el parámetro desde el amplificador. -->
+    <string name="debug_connection_read_level">GET</string>
     <string name="debug_connection_log_copied">Log copiado</string>
     <string name="debug_connection_empty_log">Sin actividad todavía.</string>
     <string name="debug_connection_state_idle">Sin conectar</string>

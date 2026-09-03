@@ -5,6 +5,7 @@ import android.hardware.usb.UsbDevice
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.alonx3.ktnacontrol.device.KatanaLink
+import dev.alonx3.ktnacontrol.device.KatanaParameter
 import dev.alonx3.ktnacontrol.device.KatanaRepository
 import dev.alonx3.ktnacontrol.protocol.Address
 import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
@@ -68,10 +69,25 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
 
     private var repository: KatanaRepository? = null
 
-    private val _reverbLevel = MutableStateFlow<Int?>(null)
+    /**
+     * Cached value of every level, keyed by [LevelId]; null until it is read or the amp
+     * reports it.
+     *
+     * One map instead of six `StateFlow`s: adding a parameter no longer means adding a field,
+     * a mirror job, two handlers and a slider.
+     */
+    private val _levels = MutableStateFlow(LevelId.entries.associateWith { null as Int? })
+    val levels: StateFlow<Map<LevelId, Int?>> = _levels.asStateFlow()
 
-    /** Reverb level as the repository sees it, or null before the first read. */
-    val reverbLevel: StateFlow<Int?> = _reverbLevel.asStateFlow()
+    private val _editMode = MutableStateFlow(false)
+
+    /**
+     * Whether edit mode was **last switched on by this app** — not what the amp confirms.
+     *
+     * A Roland write is fire-and-forget (DT1) and never acknowledged, so there is nothing to
+     * read back. If the amp is power-cycled or another editor talks to it, this can drift.
+     */
+    val editMode: StateFlow<Boolean> = _editMode.asStateFlow()
 
     private var repositoryMirror: Job? = null
 
@@ -87,7 +103,7 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     init {
         if (scanner.isSupported) {
             scanner.start()
-            appendLog("Escuchando conexiones USB. Pulsa «Buscar dispositivo» o conecta el amp.")
+            appendLog("Escuchando conexiones USB.")
         } else {
             appendLog("Este dispositivo no expone USB host (UsbManager no disponible).")
             _state.value = UsbConnectionState.Failed("USB host no disponible")
@@ -98,6 +114,43 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         viewModelScope.launch {
             scanner.deviceEvents.collect { event -> onDeviceEvent(event) }
         }
+        // Caso 3: el amp ya estaba enchufado antes de abrir la app, así que no llega ningún
+        // intent ni broadcast — hay que mirar activamente.
+        viewModelScope.launch { autoConnect() }
+    }
+
+    /**
+     * Se conecta al Katana si ya está enchufado, sin esperar a ningún evento.
+     *
+     * Cubre el caso de abrir la app con el amplificador puesto de antes: ahí no hay
+     * `USB_DEVICE_ATTACHED` (llegó antes de que existiéramos) ni intent de arranque.
+     */
+    private suspend fun autoConnect() {
+        if (!scanner.isSupported || transport != null) return
+        val katana = withContext(Dispatchers.IO) { scanner.findKatana() }
+        if (katana == null) {
+            appendLog("Sin Katana enchufado. Conéctalo, o pulsa «Buscar dispositivo».")
+            return
+        }
+        appendLog("Katana ya enchufado: ${katana.describe().toLogText()}")
+        connect(katana)
+    }
+
+    /**
+     * Caso 1: Android abrió la app al conectar el amplificador y nos pasó el dispositivo en
+     * el intent.
+     *
+     * Ese camino además concede el permiso USB de forma implícita, así que normalmente no
+     * aparece el diálogo del sistema.
+     */
+    fun onDeviceAttachedByIntent(device: UsbDevice) {
+        val description = device.describe()
+        if (!description.isKatana) {
+            appendLog("La app se abrió por un USB que no es el Katana: ${description.toLogText()}")
+            return
+        }
+        appendLog("Abierta al conectar el amplificador: ${description.toLogText()}")
+        viewModelScope.launch { connect(device) }
     }
 
     fun onScanClicked() {
@@ -191,11 +244,14 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         appendLog("  Preset actual (primeros ${nameBytes.size} B): \"$name\"")
     }
 
-    /** Turns edit mode on, so the amp starts reporting changes it makes on its own. */
-    fun onEditModeOnClicked() = setEditMode(enabled = true)
-
-    /** Turns edit mode off, leaving the amp as it was before the test. */
-    fun onEditModeOffClicked() = setEditMode(enabled = false)
+    /**
+     * Turns edit mode on or off. On is what makes the amp report its own changes — a
+     * front-panel knob, say — so it is what keeps the sliders in sync with the hardware.
+     *
+     * It **changes the state of the amplifier**, which is why CLAUDE.md §4.2 asks for it to be
+     * an explicit, visible control with a way back off, not something switched silently.
+     */
+    fun onEditModeChanged(enabled: Boolean) = setEditMode(enabled)
 
     /**
      * Writes edit mode and then watches the stream for a moment.
@@ -211,6 +267,9 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         val value = if (enabled) KatanaAddresses.EDIT_MODE_ON else KatanaAddresses.EDIT_MODE_OFF
         val message = RolandSysEx.set(KatanaAddresses.EDIT_MODE, byteArrayOf(value))
 
+        // Optimista: un SET no se confirma, así que no hay nada que esperar antes de mover el
+        // interruptor.
+        _editMode.value = enabled
         viewModelScope.launch {
             appendLog("→ SET Edit Mode $label (${KatanaAddresses.EDIT_MODE}):")
             appendLog("  sysex: ${message.toHexString()}")
@@ -324,7 +383,18 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         connect(katana)
     }
 
+    /**
+     * Punto único de conexión para los tres caminos: intent de arranque, broadcast de
+     * conexión en caliente, y el botón manual.
+     *
+     * El guard importa: los tres pueden dispararse casi a la vez —abrir por intent y el
+     * escaneo inicial, por ejemplo— y sin él se reclamaría la interfaz dos veces o saldrían
+     * dos diálogos de permiso.
+     */
     private suspend fun connect(device: UsbDevice) {
+        if (transport != null) return
+        if (_state.value is UsbConnectionState.AwaitingPermission) return
+
         if (scanner.hasPermission(device)) {
             openTransport(device)
         } else {
@@ -443,39 +513,66 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         )
         repository = newRepository
         repositoryMirror = viewModelScope.launch {
-            newRepository.reverbLevel.collect { level -> _reverbLevel.value = level }
+            LevelId.entries.forEach { id ->
+                launch {
+                    parameterIn(newRepository, id).state.collect { value ->
+                        _levels.update { levels -> levels + (id to value) }
+                    }
+                }
+            }
         }
+        // Una lectura detrás de otra, no en paralelo: las respuestas se correlan por dirección
+        // sobre un stream compartido, y lanzarlas a la vez es la misma carrera que ya hubo con
+        // los nombres de preset.
         viewModelScope.launch {
-            val level = newRepository.readReverbLevel()
-            appendLog(
-                if (level != null) "  Reverb level inicial: $level"
-                else "  ! No se pudo leer el reverb level inicial."
-            )
+            LevelId.entries.forEach { id ->
+                val value = parameterIn(newRepository, id).read()
+                appendLog(
+                    if (value != null) "  ${id.logName} inicial: $value"
+                    else "  ! No se pudo leer ${id.logName} inicial."
+                )
+            }
         }
     }
+
+    private fun parameterIn(repository: KatanaRepository, id: LevelId): KatanaParameter =
+        when (id) {
+            LevelId.GAIN -> repository.gainLevel
+            LevelId.VOLUME -> repository.volumeLevel
+            LevelId.BASS -> repository.bassLevel
+            LevelId.MIDDLE -> repository.middleLevel
+            LevelId.TREBLE -> repository.trebleLevel
+            LevelId.REVERB -> repository.reverbLevel
+            LevelId.PRESENCE -> repository.presenceLevel
+            LevelId.BOOST -> repository.boostLevel
+            LevelId.MOD -> repository.modLevel
+            LevelId.FX -> repository.fxLevel
+            LevelId.DELAY -> repository.delayLevel
+        }
 
     /**
-     * TEMPORARY: reads the reverb level straight from the amp and prints it.
+     * Reads one level straight from the amp: the GET half of an address test (CLAUDE.md §5).
      *
-     * Answers question (b): pressed right after moving the slider, it says whether the SET
-     * landed on the amp or not, which separates "the write never took" from "the write took
-     * but the app does not show it".
+     * A write that never landed and a write the amp accepts but ignores look identical from
+     * the app; this plus the ear is what tells them apart.
      */
-    fun onReadReverbLevelClicked() {
+    fun onReadLevelClicked(id: LevelId) {
         val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = parameterIn(active, id)
         viewModelScope.launch {
-            appendLog("→ GET reverb level (${KatanaAddresses.REVERB_LEVEL}):")
-            val value = active.readReverbLevel()
+            appendLog("→ GET ${id.logName} (${parameter.address}):")
+            val value = parameter.read()
             appendLog(
                 if (value != null) "  ← el amp responde: $value"
-                else "  · sin respuesta al GET de reverb level."
+                else "  · sin respuesta al GET de ${id.logName}."
             )
         }
     }
 
-    /** Moves the reverb level; the write is optimistic, so the slider does not lag. */
-    fun onReverbLevelChanged(value: Int) {
-        repository?.setReverbLevel(value)
+    /** Moves one level. Optimistic and debounced, so the slider never lags the finger. */
+    fun onLevelChanged(id: LevelId, value: Int) {
+        val active = repository ?: return
+        parameterIn(active, id).set(value)
     }
 
     private fun closeTransport() {
@@ -485,7 +582,8 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         repositoryMirror = null
         repository?.close()
         repository = null
-        _reverbLevel.value = null
+        _levels.value = LevelId.entries.associateWith { null }
+        _editMode.value = false
         transport?.close()
         transport = null
     }

@@ -32,12 +32,16 @@ condiciona la arquitectura de esta app.
   enchufar el amp, registra todo lo que llega, y tiene botones para handshake, Identity
   Request, nombre del dispositivo, nombres de preset y edit mode.
 - [device/](app/src/main/java/dev/alonx3/ktnacontrol/device/) — `KatanaLink` (puerto estrecho
-  para poder testear con un falso) y `KatanaRepository`, de momento con **un solo parámetro**:
-  el nivel de reverb, con lectura, escritura optimista y actualización desde los mensajes
-  espontáneos. Confirmado con audio real.
+  para poder testear con un falso), `KatanaParameter` (un parámetro de un byte: dirección,
+  rango, caché, lectura, escritura optimista con debounce de ~100 ms y actualización desde
+  los mensajes espontáneos) y `KatanaRepository`, que los registra. **Los seis niveles de
+  efecto están confirmados con audio real** —reverb, Presence, Boost, Mod, FX y Delay—, todos
+  con lectura, escritura y actualización desde la perilla física. Añadir otro parámetro es
+  una línea.
 - El paquete `midi/` (enfoque `MidiManager`) está **eliminado**; ver §4.1 para el porqué.
-- **Falta**: los otros parámetros (ver el proceso en §5), el anti-flood con debounce de
-  ~100 ms, el parseo del dump en parámetros, y la UI real de control.
+- **Falta**: el parseo del dump en parámetros y la UI real de control. La pantalla de
+  diagnóstico tiene dos secciones tras un menú hamburguesa —**Logs** (acciones + consola) y
+  **Sliders** (los seis niveles)—, con el toggle de Edit Mode visible en las dos.
 
 ## 3. Build
 
@@ -330,7 +334,38 @@ El nivel de reverb costó **tres candidatas** y solo el oído las distinguió:
 | `60 00 05 48` | reverb.yaml:17, sección `SEND` | ❌ escribir no hace nada; sí **reporta** un valor derivado y retardado |
 | **`60 00 06 5B`** | reverb.yaml:19, sección `SEND` | ✅ **lectura y escritura**, cambio audible |
 
-Lecciones, que aplican a los cinco efectos que quedan:
+Presence, en cambio, salió a la primera con la candidata alta **`60 00 06 56`** (2026-09-02):
+cambio audible de brillo, y la perilla física reporta por esa misma dirección. La baja
+(`60 00 00 27`) quedó **sin probar** y se conserva documentada solo por si Presence resultara
+tener el mismo problema que el reverb más adelante.
+
+##### El bloque `60 00 06 50`–`60 00 06 5B` es la lista de perillas del panel
+
+Esto es lo que explica por qué la dirección "alta" es la de control, y sale de
+[reference/FxFloorboard/midi.xml:3981-3992](reference/FxFloorboard/midi.xml), donde el
+bloque aparece nombrado uno a uno y **en el orden físico del panel**:
+
+| Dirección | Nombre en `midi.xml` | Estado |
+| --- | --- | --- |
+| `60 00 06 50` | Panel Knob: Amp Type | sin probar |
+| `60 00 06 51` | Panel Knob: Gain | ✅ confirmado por audio |
+| `60 00 06 52` | Panel Knob: Volume | ✅ confirmado por audio |
+| `60 00 06 53` | Panel Knob: Bass | ✅ confirmado por audio |
+| `60 00 06 54` | Panel Knob: Middle | ✅ confirmado por audio |
+| `60 00 06 55` | Panel Knob: Treble | ✅ confirmado por audio |
+| `60 00 06 56` | Panel Knob: Presence | ✅ confirmado por audio |
+| `60 00 06 57` | Panel Knob: Booster | ✅ confirmado por audio |
+| `60 00 06 58` | Panel Knob: MOD | ✅ confirmado por audio |
+| `60 00 06 59` | Panel Knob: FX | ✅ confirmado por audio |
+| `60 00 06 5A` | Panel Knob: Delay 1 | ✅ confirmado por audio |
+| `60 00 06 5B` | Panel Knob: Reverb/Delay2 | ✅ confirmado por audio |
+
+**Once de las doce entradas del bloque están confirmadas por oído** (`06 51`–`06 5B`), cada
+una en la posición que la tabla predice. Solo queda `06 50` (Amp Type) — que además no es un
+nivel continuo, así que ni siquiera el rango `0..100` se le puede suponer. Documentado en
+`KatanaAddresses.AMP_TYPE`, deliberadamente fuera del modelo de niveles de `device/`.
+
+Lecciones del proceso, útiles para lo que quede por descubrir (selectores de color, Amp Type):
 
 - **Que una fuente de Mk2 liste una dirección bajo `SEND` no basta.** `60 00 05 48` lo está
   y no funciona. En `set_mapping.py:39-43` TuxKatana fusiona `SEND` y `RECV` en el mismo
@@ -339,13 +374,50 @@ Lecciones, que aplican a los cinco efectos que quedan:
   respuesta al GET no demuestran nada: `60 00 06 18` cumplía las tres cosas.
 - **Prueba mínima**: SET a los extremos (0 y 100) → ¿cambia el sonido? Luego GET a la misma
   dirección → ¿cambió el estado? Y mover la perilla física → ¿reporta por esa dirección?
-- **No hay un patrón fiable "escritura baja / reporte alto".** `Adresses.txt` empareja cada
-  efecto con una dirección baja y una del bloque `60 00 06 5x`, y para reverb resultó ser la
-  **alta** la de control. Las bajas siguen siendo candidatas legítimas a probar primero
-  —están citadas como `SEND`— pero **cada parámetro se prueba por separado**:
-  Presence `60 00 00 27` / `60 00 06 56`, Boost `60 00 00 12` / `60 00 06 57`,
-  Mod `60 00 02 38` / `60 00 06 58`, FX `60 00 04 14` / `60 00 06 59`,
-  Delay `60 00 05 06` / `60 00 06 5A`.
+- **Que el patrón lleve once aciertos de once no lo convierte en regla universal**, aunque sí
+  es la mejor apuesta posible para cualquier dirección nueva del mismo bloque. Ninguna de las
+  "bajas" documentadas llegó a hacer falta —todas siguen sin probar—, y `60 00 05 48` sigue
+  ahí para recordar que una dirección plausible puede aceptar el mensaje y no hacer nada. La
+  única sorpresa real fue Gain/Volume (ver más abajo): las fuentes se contradecían y la alta
+  ganó igual.
+- **Una fuente puede afirmar justo lo contrario y seguir estando equivocada.**
+  `Adresses.txt:36-41` decía, con flechas explícitas — el único sitio del fichero anotado
+  así —, que `60 00 06 51` era *read status* y `60 00 00 22` la de escritura: exactamente el
+  patrón "escritura baja / reporte alto" que ya había fallado con el reverb. El audio dijo lo
+  contrario. Ni siquiera una anotación inequívoca sustituye la prueba.
+- **El ruido de las fuentes no predice el resultado.** `booster.yaml` repite `60 00 06 57`
+  bajo `Unimplemented:`, y funcionó igual. Al revés que `60 00 05 48`, que estaba limpiamente
+  en `SEND` y no funcionó. Las anotaciones de las fuentes de Mk2 no ordenan nada: solo el
+  audio.
+- **Los rangos casi nunca están documentados para estas direcciones.** Ninguna fuente de Mk2
+  da rango explícito para las seis; se usa `0..100` por analogía con el mapa MK1
+  (`amplifier.json`) y con el formato `normal` de `slider_formats.yaml`. Es una **suposición
+  razonada**, no un dato — pero **probada y aceptada** (2026-09-03): ver abajo.
+##### Sobre los rangos `0..100` y sobre qué es realmente el slider de Delay
+
+Dos cosas que salieron de usar la app contra el amplificador y que ninguna fuente decía:
+
+- **El rango `0..100` se da por bueno, con una observación.** En las seis perillas, el slider
+  llega a 100 cuando la perilla física está *a punto* del tope: queda un tramo mínimo de
+  recorrido. No está establecido si el 100 real está en el tope físico o si ese resto es
+  holgura mecánica, y la diferencia entre 98 y 100 es inaudible, así que no se puede zanjar
+  de oído. **Decisión: el rango queda como está.** Si alguna vez importa, hay una prueba que
+  no necesita el oído: con edit mode activo, girar la perilla hasta el tope y **leer el valor
+  que reporta el amplificador**.
+- **`60 00 06 5A` no es "el nivel del delay 1": es el mix global de los dos delays.** El
+  Katana Mk2 tiene **dos** delays y **una sola perilla DELAY**; esa perilla ajusta el mix
+  entre ambos. O sea que la línea comentada `# "60 00 06 5A": glob_mix_lvl` de `delay.yaml`
+  probablemente sea el nombre correcto, y el `Panel Knob: Delay 1` de `midi.xml` sea el nombre
+  de la perilla, no de lo que hay detrás. La prueba de audio **no distinguió** las dos cosas:
+  se hizo con el delay 2 apagado, y así el mix global se comporta igual que el nivel del
+  delay 1. Importa el día que se quiera controlar cada delay por separado — entonces esta no
+  es la dirección.
+
+- **La perilla no es lo único físico.** Cada efecto tiene además un botón de color
+  (verde/rojo/amarillo) que vive en **otra** dirección —`60 00 06 39` para Boost,
+  `06 3A` Mod, `06 3B` FX, `06 3C` Delay, `06 3D` Reverb—, y un on/off propio
+  (`60 00 00 10` para Boost). Al pulsar el botón de color **no** deben llegar mensajes por la
+  dirección de la perilla; eso es lo esperado, no un fallo.
 
 También responde a **Program Change** (0–8: BANK_A CH1-4, PANEL, BANK_B CH1-4) y a
 **Control Change** (CC16 booster, CC17 mod, CC18 fx, CC19 delay, CC20 reverb, CC7 volumen global),

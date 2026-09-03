@@ -150,30 +150,168 @@ seguimiento, no repite lo que ya está ahí.
   - Costó **tres candidatas** y solo el audio las distinguió. El proceso queda escrito en
     CLAUDE.md §5 para no repetirlo a ciegas con los cinco efectos que faltan.
 
+- **2026-09-02** — `KatanaRepository` generalizado: cada parámetro controlable es un
+  `device/KatanaParameter` que encapsula dirección, rango, `StateFlow` de caché, GET, SET
+  optimista y la regla anti-eco. Añadir el siguiente es **una línea** en el repositorio, no
+  otra copia de toda la lógica. Incluye el **debounce de 100 ms** que pedía CLAUDE.md §4.2:
+  cada escritura cancela el envío pendiente y reinicia el temporizador, así que arrastrar el
+  slider manda **un solo SET** con el valor final, mientras la caché se actualiza al
+  instante. Reverb migrado sin cambio de comportamiento. Las cinco candidatas para los otros
+  efectos quedan en `KatanaAddresses.LevelCandidates`, marcadas **sin verificar**.
+  11 tests en `KatanaRepositoryTest` (69 en total, todos pasan).
+  - ✅ **Confirmado con el amplificador real**: al arrastrar el slider ya no salen valores
+    intermedios — solo el final, ~100 ms después de soltar, y el sonido resultante es el
+    correcto.
+  - ✅ **La perilla física sigue actualizando el slider en tiempo real.** Ese camino
+    (mensaje espontáneo → caché) no pasa por el debounce y el cambio no lo afectó, que era
+    justo lo que había que comprobar: el debounce solo debe frenar lo que la app **envía**,
+    nunca lo que **recibe**.
+
+- **2026-09-02** — Auto-conexión en los tres caminos posibles. El fallo era que
+  `MainActivity` **ignoraba el intent** con el que Android la abría: leía el `USB_DEVICE_ATTACHED`
+  para arrancar, pero nunca el `EXTRA_DEVICE` que viene dentro, así que la app se abría sola
+  y se quedaba esperando el botón. Ahora:
+  - `MainActivity` lee el `UsbDevice` del intent en `onCreate` y `onNewIntent`, y lo pasa al
+    ViewModel (`onDeviceAttachedByIntent`). Manifest con `launchMode="singleTop"` para que
+    reconectar con la app en primer plano no cree una segunda pantalla.
+  - El ViewModel escanea al arrancar (`autoConnect`), que cubre abrir la app con el amp ya
+    enchufado — ahí no hay ni intent ni broadcast que dispare nada.
+  - El broadcast de `USB_DEVICE_ATTACHED` ya funcionaba y no se tocó.
+  - `connect()` es ahora el punto único de los tres caminos, con guard de idempotencia.
+  «Buscar dispositivo» sigue estando como respaldo manual.
+  - ✅ **Confirmado en el amplificador real, en los tres escenarios**: (1) app cerrada,
+    reconectar el amp saca el diálogo de selección de Android y al aceptar la app abre **ya
+    conectada**; (2) app abierta en segundo plano, conectar el amp la conecta sola; (3) abrir
+    la app desde el launcher con el amp ya puesto, también se conecta sola. En ninguno hizo
+    falta tocar «Buscar dispositivo».
+
+- **2026-09-02** — **Presence controlable, `60 00 06 56`.** ✅ **Confirmado con audio real**:
+  mover el slider cambia el brillo/presencia del sonido de forma audible, y la perilla física
+  reporta por esa misma dirección con Edit Mode activo. Lectura y escritura consistentes.
+  - **A la primera, esta vez.** La candidata "alta" del bloque `60 00 06 5x` funcionó sin
+    necesidad de descartar la baja (`60 00 00 27`), que queda **sin probar**, documentada solo
+    como candidata no verificada por si Presence diera problemas más adelante — no debería
+    hacer falta.
+  - El rango `0..100` es una **suposición declarada**, no un dato: ver la nota técnica de
+    abajo. Anotado en el KDoc de `PRESENCE_LEVEL_RANGE` como recordatorio.
+  - Segundo parámetro sobre `KatanaParameter`: fue una línea en `KatanaRepository` más el
+    slider. El modelo genérico se sostiene.
+  - **Quedan 4 efectos por probar: Boost, Mod, FX, Delay.** Cada uno con su candidata alta del
+    bloque `60 00 06 5x` a probar primero (`06 57`, `06 58`, `06 59`, `06 5A`), **sin asumir
+    que el patrón se sostiene solo porque funcionó dos veces seguidas**.
+
+- **2026-09-02** — **Boost (`60 00 06 57`) y Mod (`60 00 06 58`) controlables.**
+  ✅ **Confirmados con audio real**: mover cada slider cambia el sonido, y **ambos se
+  actualizan al girar la perilla física** del amplificador (con Edit Mode activo). Con esto
+  son **cuatro de seis** niveles confirmados: reverb, Presence, Boost y Mod.
+  - El `Unimplemented:` con que `booster.yaml` repite `60 00 06 57` resultó ser ruido:
+    TuxKatana no la usa, el amplificador sí la acepta. Ver la nota técnica.
+  - Quedan FX y Delay, en «En progreso».
+
+- **2026-09-02** — **FX (`60 00 06 59`) y Delay (`60 00 06 5A`) cableados**, pendientes de
+  confirmar por oído. Con ellos, `LevelCandidates` se queda vacío y **se elimina**: los seis
+  niveles tienen ya constante propia documentada.
+
+- **2026-09-02** — **UI reorganizada en dos secciones con menú hamburguesa.**
+  - **El bug**: la consola de logs había desaparecido de la pantalla. Causa: todo vivía en una
+    sola `Column`; con ocho botones y cuatro sliders de altura fija, al `weight(1f)` de la
+    consola no le quedaba espacio que repartir. No era un fallo de la consola sino del
+    reparto de altura.
+  - **La solución**: `ModalNavigationDrawer` con dos secciones —**Logs** (acciones + consola +
+    copiar al portapapeles) y **Sliders** (los seis niveles, con scroll)—. Al no competir por
+    la altura, la consola vuelve a tener sitio, y añadir el séptimo slider no puede volver a
+    romperla.
+  - **Edit Mode pasa de dos botones a un `Switch`**, que es lo que siempre fue: un estado, no
+    dos acciones. Sigue siendo explícito y visible con vuelta atrás obvia (CLAUDE.md §4.2).
+  - Botones acortados (Buscar, Handshake, Identity, Nombre, Presets, Dump) y colocados en un
+    `FlowRow` que envuelve solo, en vez de filas hechas a mano.
+  - Sin dependencias nuevas: el icono ☰ es un glifo en `strings.xml`, no `material-icons`.
+
+- **2026-09-03** — **FX (`60 00 06 59`) y Delay (`60 00 06 5A`) confirmados con audio real.**
+  Con ellos, **los seis niveles de efecto del Katana Mk2 están cerrados**: reverb, Presence,
+  Boost, Mod, FX y Delay, los seis con lectura, escritura audible y actualización desde la
+  perilla física con Edit Mode activo.
+  - Sobre Delay escribí que quedaba "descartada" la sospecha del `glob_mix_lvl`. **Era
+    incorrecto**: ver la entrada del 2026-09-03. La prueba de audio se hizo con el delay 2
+    apagado, y así el mix global y el nivel del delay 1 son indistinguibles.
+  - **Ninguna de las direcciones "bajas" llegó a hacer falta.** Se conservan documentadas
+    (`FX_LEVEL_LOW`, `DELAY_LEVEL_LOW`, etc.) por si algún parámetro diera problemas más
+    adelante, pero las seis candidatas altas acertaron a la primera.
+  - Seis de seis para el patrón del bloque de perillas. Sigue sin ser una regla: ver la nota
+    técnica sobre lo que eso permite y lo que no.
+
+- **2026-09-03** — **Toggle de Edit Mode en las dos secciones.** Estaba solo en Logs, que es
+  el sitio equivocado para el caso de uso real: los sliders **dejan de seguir a las perillas
+  físicas** sin Edit Mode, y tener que cambiar de sección para descubrir por qué no se mueve
+  nada era un pequeño bug de usabilidad en sí mismo. Un único `EditModeToggle` compartido
+  sobre un solo `StateFlow`, así que mover cualquiera de los dos interruptores mueve el otro.
+
+- **2026-09-03** — **Rangos de los sliders probados contra el amplificador y aceptados.** En
+  las seis perillas el slider llega a 100 cuando la perilla física está *a punto* del tope,
+  quedando un tramo mínimo de recorrido. **No está establecido** si el 100 real está en el
+  tope físico o si ese resto es holgura mecánica: la diferencia entre 98 y 100 es inaudible y
+  no se puede zanjar de oído. **Decisión del dueño del amplificador: se da el rango por
+  bueno** y `0..100` se queda. Anotado en los seis `*_LEVEL_RANGE`, junto con la prueba que sí
+  lo zanjaría si algún día importa —girar la perilla al tope con edit mode activo y leer el
+  valor que reporta el amp—, que no necesita el oído.
+
+- **2026-09-03** — **Corrección: `60 00 06 5A` es el mix global de los dos delays**, no el
+  nivel del delay 1. El Katana Mk2 tiene **dos** delays y **una sola perilla DELAY** en el
+  panel, y esa perilla ajusta el mix entre ambos. Sigue en el mismo sitio de la app y el
+  slider es correcto; lo que cambia es lo que dice la documentación que hace.
+
+- **2026-09-03** — **Gain, Volume, Bass, Middle y Treble cableados** (`60 00 06 51`–`06 55`),
+  pendientes de confirmar por oído. Once niveles en total sobre `KatanaParameter`; la pantalla
+  de Sliders no necesitó ni un cambio porque itera `LevelId.entries`.
+  - **`LevelId` reordenado al orden físico del panel**, que resulta ser también el de las
+    direcciones: Gain, Volume, Bass, Middle, Treble, Presence, Boost, Mod, FX, Delay, Reverb
+    = `06 51` … `06 5B`. Antes empezaba por Reverb, que era el orden en que se fueron
+    descubriendo, no el del amplificador.
+  - **Amp Type (`60 00 06 50`) queda fuera a propósito**: es un selector de tipo de
+    amplificador, no un nivel continuo. Documentado en `KatanaAddresses.AMP_TYPE` para que su
+    ausencia no parezca un olvido.
+
+- **2026-09-03 — ✅ Gain, Volume, Bass, Middle y Treble confirmados con audio real.** Las
+  cinco cambian el sonido audiblemente (ganancia, volumen, graves, medios, agudos) y las
+  cinco perillas físicas actualizan sus sliders con Edit Mode activo. Probadas las cinco
+  juntas en una sesión, sin necesitar ir de a una — cada una tiene una firma auditiva
+  inconfundible.
+  - **Gain y Volume acertaron pese al conflicto de fuentes.** `Adresses.txt` afirmaba, con
+    flechas explícitas, que `60 00 06 51` era *read status* y `60 00 00 22` la de escritura —
+    justo el patrón "escritura baja / reporte alto" que ya había fallado con el reverb. El
+    audio dice que la alta es la de control, como en las otras nueve. Las direcciones bajas
+    (`GAIN_LEVEL_LOW`, `VOLUME_LEVEL_LOW`, `BASS_LEVEL_LOW`, `MIDDLE_LEVEL_LOW`,
+    `TREBLE_LEVEL_LOW`) quedan documentadas sin haber hecho falta ninguna.
+  - **Con esto, los once niveles continuos del bloque de perillas del panel están cerrados**
+    (`60 00 06 51`–`06 5B`): Gain, Volume, Bass, Middle, Treble, Presence, Boost, Mod, FX,
+    Delay, Reverb. Solo queda `60 00 06 50` (Amp Type), que no es un nivel — ver «Por hacer».
+
 ## En progreso
 
-- **Probar la auto-conexión del monitor** — lo demás del monitor ya está confirmado (el
-  flow entrega respuestas y mensajes espontáneos). **Queda por comprobar: que al enchufar el
-  amp la app se conecte sola, sin pulsar «Buscar dispositivo».**
 
 ## Por hacer
 
-Orden de prioridad:
-
-1. **Bucle de lectura continuo** — hoy `receiveRaw()` se llama una sola vez justo después de
-   enviar. Falta el bucle en `Dispatchers.IO` que alimente un `Flow<ByteArray>`, y atender
-   `USB_DEVICE_ATTACHED` / `USB_DEVICE_DETACHED` para conectar y soltar solo.
-2. **`SysExFramer`** — reensamblar mensajes `F0…F7` desde trozos arbitrarios de bytes. Hoy
-   cada lectura se asume un mensaje completo; con el dump de memoria (1920 bytes en varios
-   mensajes) deja de ser cierto.
-3. **Resto de mensajes SysEx del Katana** — implementar contra
-   [reference/katana-midi-bridge/doc/katana_sysex.txt](reference/katana-midi-bridge/doc/katana_sysex.txt),
-   en este orden (el nombre del dispositivo ya está hecho):
-   - Nombres de los 8 presets (`10 01 00 00` … `10 08 00 00`).
-   - Edit mode (`7F 00 00 01`).
-   - Dump de memoria completo (`60 00 00 00`, tamaño `00 00 0F 00`) y reensamblado multi-mensaje.
-   - Parámetros individuales por bloque (Amplifier Common, Boost/Mod, Delay/FX, Reverb,
-     Color Button Management), según las tablas del mismo doc.
+1. **Selectores de color por efecto** — cada efecto tiene tres bancos (verde/rojo/amarillo)
+   en su propia dirección, ya documentadas: Boost `60 00 06 39`, Mod `60 00 06 3A`,
+   FX `60 00 06 3B`, Delay `60 00 06 3C`, Reverb `60 00 06 3D`. **No son niveles**: valores
+   `00|01|02`, así que no les vale el `Slider` ni el rango `0..100`; necesitan un control de
+   tres estados. Igual que con los niveles, cada uno se confirma con audio antes de darlo por
+   bueno.
+2. **Amp Type (`60 00 06 50`)** — el selector de tipo de amplificador
+   (Acoustic/Clean/Crunch/Lead/Brown, más variaciones y "sneaky amps"). Tampoco es un nivel:
+   necesita UI propia y la tabla de valores de `amplifier.yaml` (sección `Types`).
+   Documentado como `KatanaAddresses.AMP_TYPE` y deliberadamente fuera de `LevelId`.
+3. **Parsear el dump de memoria en parámetros.** Hoy `onReadMemoryDumpClicked` solo lo lee y
+   lo loguea; falta convertir esos bytes en el modelo de dominio (`AmpState` / `Preset`, ver
+   CLAUDE.md §4.2) para poblar la UI sin depender de un GET por parámetro al conectar — que
+   con once niveles ya son once peticiones en serie.
+4. **UI real de control** — más allá de la pantalla de diagnóstico (`DebugConnectionScreen`):
+   pantallas por dominio (`AmpScreen`, `EffectsScreen`, `PresetsScreen`, ver CLAUDE.md §4.2),
+   sin exponer direcciones SysEx a la capa de Compose.
+5. **Decidir explícitamente kshoji/USB-MIDI-Driver** (CLAUDE.md §6) — la recomendación
+   registrada es no usarla, pero la decisión sigue marcada como pendiente de confirmar.
+6. **La duda del handshake sin respuesta** (CLAUDE.md §4.1) — de baja prioridad y no
+   bloqueante; nada de lo implementado la ha necesitado hasta ahora.
 
 ## Notas y decisiones técnicas
 
@@ -331,6 +469,126 @@ Orden de prioridad:
     explícitamente). No hay que tratar "llegaron menos de 1920" como un error.
   - `SysExFramer.DEFAULT_MAX_MESSAGE_SIZE` = 4096: sobra incluso para el peor caso
     (1920 + 14 de overhead = 1934), así que no hizo falta tocarlo.
+- **2026-09-02 — El debounce es *trailing*, no throttle.** Cada `set()` cancela el envío
+  pendiente y reinicia los 100 ms, así que durante un arrastre continuo no se manda nada
+  hasta que el dedo se detiene. Es lo que pide CLAUDE.md §4.2 ("solo el último valor"), y
+  difiere de `anti_flood.py` de TuxKatana, que además va soltando valores intermedios cada
+  100 ms. Si algún día se quiere que el amp siga el arrastre en vivo, habría que cambiar a
+  throttle — pero entonces vuelve el riesgo de inundarlo que motivó la nota original.
+- **2026-09-03 — La anotación más explícita de `Adresses.txt` resultó ser la equivocada.**
+  Con flechas de dirección inequívocas —único sitio del fichero anotado así— afirmaba que
+  `60 00 06 51` era de solo lectura y `60 00 00 22` la de escritura. El audio dice lo
+  contrario. Ni una anotación sin ambigüedad sustituye la prueba; once de once direcciones
+  altas confirmadas es la evidencia que manda.
+- **2026-09-03 — Las perillas de amp/EQ tienen peor documentación que los efectos.** En los
+  seis efectos, la fuente de Mk2 (`reverb.yaml`, `booster.yaml`, `mod.yaml`, `fx.yaml`,
+  `delay.yaml`) citaba la dirección **alta** bajo `SEND`. En `amplifier.yaml` no: solo Gain y
+  Volume aparecen con la alta, y Bass/Middle/Treble aparecen con la **baja**, sin mencionar
+  siquiera `06 53`–`06 55`. Y `Adresses.txt:36-41` va más lejos y afirma explícitamente
+  —único sitio del fichero con flechas de dirección— que `06 51` es *read status* y `00 22` la
+  de escritura. Así que el patrón que acertó seis de seis choca aquí con la anotación más
+  explícita que tiene ninguna fuente. Se prueban igual las altas primero, pero **esperar más
+  fallos que en los efectos es razonable**, y si fallan no significa que el patrón fuera
+  falso: significa que el bloque de perillas puede no ser homogéneo.
+- **2026-09-03 — Confirmar por audio confirma *que responde*, no *qué es*.** El caso de
+  `60 00 06 5A` lo enseña: la prueba de oído dijo "esto es el nivel del delay" y en realidad
+  es el mix global de los dos delays. Con el delay 2 apagado —que es como estaba— las dos
+  cosas son indistinguibles. La lección no invalida el método (el oído sigue siendo lo único
+  que distingue una dirección viva de una muerta), pero acota lo que demuestra: **una prueba
+  de audio con el resto de la cadena en un estado concreto solo prueba el comportamiento en
+  ese estado.** Cuando una fuente diga algo distinto de lo que parece oírse, no darla por
+  muerta: puede estar describiendo el caso que la prueba no cubrió.
+- **2026-09-03 — Seis de seis, y aun así el patrón no es una regla.** Las seis candidatas
+  "altas" del bloque `60 00 06 5x` acertaron, todas en la posición que predecía la tabla de
+  `midi.xml`. Lo que eso justifica: **empezar por ahí** al atacar las seis perillas de arriba
+  del bloque (Amp Type, Gain, Volume, Bass, Middle, Treble). Lo que no justifica: darlas por
+  buenas. La lista de `midi.xml` es de destinos de *assign* —dice qué controla cada perilla,
+  no que la dirección acepte escritura por SysEx— y `60 00 05 48` sigue siendo el
+  contraejemplo: acepta el mensaje y no hace nada. Además, esas seis no son todas del mismo
+  tipo: `60 00 06 50` (Amp Type) es un **selector**, no un nivel continuo, así que ni el
+  rango `0..100` se le puede suponer.
+- **2026-09-03 — Los rangos: probados, no demostrados, y aceptados así.** El slider llega a
+  100 poco antes del tope físico en las seis perillas. Puede ser holgura mecánica o puede ser
+  que el 100 real esté en el tope; de oído no se distingue. Se acepta `0..100` como decisión
+  explícita, no como hecho verificado, y queda anotada la prueba que lo zanjaría sin oído:
+  girar la perilla al tope con edit mode activo y leer lo que reporta el amplificador.
+- **2026-09-02 — Las anotaciones de las fuentes de Mk2 no predicen nada.** `60 00 05 48`
+  estaba limpiamente en `SEND` de `reverb.yaml` y **no** funciona; `60 00 06 57` está repetida
+  bajo `Unimplemented:` en `booster.yaml` y **sí** funciona. `SEND`, `RECV` y `Unimplemented`
+  describen lo que hace TuxKatana, no lo que acepta el amplificador. Sirven para *elegir qué
+  probar*, nunca para decidir.
+- **2026-09-02 — La UI se colapsó por reparto de altura, no por un fallo de la consola.**
+  Cuatro sliders y ocho botones de altura fija en una sola `Column` dejaron al `weight(1f)`
+  de la consola sin espacio que repartir, así que desapareció sin ningún error. Partir la
+  pantalla en dos secciones lo arregla de raíz: lo que no comparte columna no puede
+  desplazarse. Es la razón de que el botón GET de cada nivel viva junto a su nombre y no en
+  una fila común que crece con cada parámetro.
+- **2026-09-02 — Un mapa `LevelId → valor` en vez de seis `StateFlow`.** El ViewModel tenía un
+  campo, un job espejo, dos handlers y un slider por parámetro; con seis, el archivo era
+  copia-pega. Ahora hay un `StateFlow<Map<LevelId, Int?>>` y dos handlers que reciben el
+  `LevelId`. Añadir el séptimo nivel es una entrada en el enum, una línea en
+  `KatanaRepository` y nada más. La UI sigue sin conocer direcciones (CLAUDE.md §4.2).
+- **2026-09-02 — El bloque `60 00 06 50`–`60 00 06 5B` es la lista de perillas del panel.**
+  `reference/FxFloorboard/midi.xml:3981-3992` lo enumera entero y **en el orden físico del
+  panel**: Amp Type, Gain, Volume, Bass, Middle, Treble, Presence (`06 56`), Booster
+  (`06 57`), MOD (`06 58`), FX (`06 59`), Delay 1 (`06 5A`), Reverb/Delay2 (`06 5B`). Eso
+  explica de una vez por qué la dirección "alta" es la de control: **es la posición de la
+  perilla**, no un valor derivado. Dos de las doce ya están confirmadas por oído (Presence y
+  reverb) y caen justo donde la tabla predice. Sigue siendo una hipótesis con buen respaldo,
+  **no** una licencia para dar por buenas las otras diez: esa lista es de destinos de
+  *assign*, que dice qué controla cada perilla, no que la dirección acepte escritura por
+  SysEx.
+- **2026-09-02 — Boost es una perilla continua, no un botón on/off.** Importa para saber qué
+  esperar en el log. En el panel del Katana MkII, BOOSTER es una perilla —`midi.xml:3988` la
+  llama literalmente `Panel Knob: Booster`—, así que girarla debe producir un chorro de
+  valores por `60 00 06 57`. Lo que **no** es la perilla: el botón de color de debajo
+  (`60 00 06 39`, `bo_bank_sel`, verde/rojo/amarillo) y el on/off del efecto
+  (`60 00 00 10`), cada uno en su propia dirección. Si al pulsar el botón de color no llega
+  nada por `06 57`, eso es lo correcto, no un fallo de la dirección.
+- **2026-09-02 — Presence: `midi.xml` la nombra literalmente, y aun así no basta.** De las
+  cinco candidatas que quedaban, Presence es la que llega con mejor aval: en
+  `reference/FxFloorboard/midi.xml:3987` aparece como
+  `<PARAM value="3C" name="Panel Knob: Presence" desc="06" customdesc="56"/>` — o sea
+  `60 00 06 56` — en la **misma lista** donde `06 5B` es `Panel Knob: Reverb/Delay2`, la
+  dirección ya confirmada por oído. Eso es bastante más que la analogía estructural de
+  `Adresses.txt:134-138`. Pero esa lista es de **destinos de assign**, no una prueba de que la
+  dirección acepte escritura, y con el reverb ya falló `60 00 05 48` estando documentada
+  explícitamente como `SEND` en una fuente de Mk2. Se cableó para poder probarla — y **se
+  oyó**: confirmada el mismo día. Pero el orden importa y se deja anotado: primero la prueba,
+  después la conclusión.
+- **2026-09-02 — El rango `0..100` de Presence es una suposición, no un dato.** Ninguna
+  fuente de Mk2 documenta el rango de `60 00 06 56`. Lo que hay:
+  `reference/katana-midi-bridge/parameters/amplifier.json:68-72` da `presence` como
+  `byteRange [0, 100]` pero es el mapa del **MK1**; y el formato `normal` de
+  `reference/TuxKatana/params/slider_formats.yaml:1-3`, el que usan los niveles de panel,
+  también es `0..100`. Coincide con el rango del reverb, ya verificado por los extremos, así
+  que se asume. **La prueba de oído confirmó la dirección, no el rango**: los extremos del
+  slider suenan, pero nada garantiza que `0..100` sea exactamente el recorrido real de la
+  perilla. Anotado porque es justo el tipo de cosa que luego se recuerda como si fuera un
+  hecho documentado. Si algún día el amplificador ignora valores cerca de 100, o el slider no
+  cubre todo el rango de la perilla física, el sospechoso es este rango, no la dirección.
+  Mismo caso con Boost.
+- **2026-09-02 — El bug de la auto-conexión no estaba en el manifest sino en el código.**
+  `MainActivity` tenía el `intent-filter` de `USB_DEVICE_ATTACHED` correctamente declarado
+  —por eso Android sí sugería la app al conectar el amplificador— pero **nunca leía el
+  intent**: ni el action ni el `EXTRA_DEVICE` que Android mete dentro. La app se abría sola
+  y se quedaba esperando el botón. Corregido leyendo `EXTRA_DEVICE` en `onCreate` y
+  `onNewIntent`. Moraleja: que Android abra la app no significa que la app se entere de por
+  qué la abrieron.
+- **2026-09-02 — Hizo falta `launchMode="singleTop"`.** Sin él `onNewIntent` no se dispara
+  nunca, y reconectar el amp con la app en primer plano crearía una **segunda instancia** de
+  la pantalla en vez de reusar la que ya está.
+- **2026-09-02 — Guard de idempotencia en `connect()`.** Los tres caminos —intent de
+  arranque, broadcast, escaneo inicial— pueden dispararse con milisegundos de diferencia.
+  Sin el guard se reclamaría la interfaz dos veces o saldrían dos diálogos de permiso.
+- **2026-09-02 — Abrir la app por el intent-filter concede el permiso USB implícitamente.**
+  Por eso el camino "Android sugiere la app al conectar" no debería mostrar el diálogo de
+  permiso, mientras que abrirla desde el launcher con el amp ya puesto sí puede pedirlo la
+  primera vez. Son caminos distintos y conviene no confundir un diálogo esperado con un fallo.
+- **2026-09-02 — Los tres caminos de conexión pueden dispararse a la vez.** Abrir por intent
+  y el escaneo inicial ocurren con milisegundos de diferencia, así que `connect()` lleva un
+  guard: si ya hay transporte, o si hay un permiso en vuelo, no hace nada. Sin él se
+  reclamaría la interfaz dos veces o saldrían dos diálogos de permiso.
 - **Un solo lector del endpoint, siempre.** `KatanaUsbTransport.incomingMessages()` es un
   flow *frío*: cada colector arrancaría su propio bucle de `bulkTransfer` y se robarían
   mensajes entre sí. El ViewModel lo colecta **una vez** y reparte por un `MutableSharedFlow`;

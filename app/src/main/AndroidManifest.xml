@@ -19,10 +19,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.KTNAControl">
+        <!-- singleTop: al reconectar el amp con la app ya en primer plano, el intent llega a
+             onNewIntent en vez de crear una segunda copia de la pantalla. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.KTNAControl"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
