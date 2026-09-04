@@ -1,6 +1,8 @@
 package dev.alonx3.ktnacontrol.device
 
 import dev.alonx3.ktnacontrol.protocol.Address
+import dev.alonx3.ktnacontrol.protocol.LevelScale
+import dev.alonx3.ktnacontrol.protocol.MidiBytes
 import dev.alonx3.ktnacontrol.protocol.RolandMessage
 import dev.alonx3.ktnacontrol.protocol.RolandSysEx
 import dev.alonx3.ktnacontrol.protocol.awaitRolandReply
@@ -21,7 +23,7 @@ const val DEFAULT_WRITE_DEBOUNCE_MS = 100L
  * Everything that is the same for every control lives here — the cache, the GET, the
  * optimistic and coalesced SET, the anti-echo rule — so a new *kind* of control only has to
  * say what values it accepts. Two kinds exist:
- *  - [KatanaParameter], a continuous level over an [IntRange];
+ *  - [KatanaParameter], a continuous level over a [LevelScale];
  *  - [KatanaEnumParameter], a choice out of a fixed list of byte values.
  *
  * Created through [KatanaRepository]; it is the repository that owns the link and dispatches
@@ -33,6 +35,14 @@ sealed class KatanaControl(
     private val link: KatanaLink,
     private val scope: CoroutineScope,
     protected val onDiagnostic: (String) -> Unit,
+    /**
+     * How many bytes of data this control's value occupies at [address].
+     *
+     * Every control in this project is 1 byte except the active channel (`00 01 00 00`),
+     * which is 2 per `CURRENT_PRESET_LEN` in `reference/katana-midi-bridge/globals.py:15` —
+     * see CLAUDE.md §5.1. Defaulting to 1 keeps every existing subclass unchanged.
+     */
+    private val byteWidth: Int = 1,
 ) {
 
     private val _state = MutableStateFlow<Int?>(null)
@@ -65,9 +75,10 @@ sealed class KatanaControl(
      * @return the value read, or null on timeout.
      */
     suspend fun read(): Int? {
-        val query = RolandSysEx.get(address, size = 1)
+        val query = RolandSysEx.get(address, size = byteWidth)
         val reply = awaitRolandReply(link.incoming, address) { link.send(query) }
-        val value = reply?.data?.firstOrNull()?.toInt()?.and(0xFF) ?: return null
+        val bytes = reply?.data?.takeIf { it.isNotEmpty() } ?: return null
+        val value = MidiBytes.decode(bytes)
         val accepted = coerce(value)
         if (accepted == null) {
             onDiagnostic("GET $address devolvió $value, que este control no acepta")
@@ -97,7 +108,7 @@ sealed class KatanaControl(
         pendingWrite?.cancel()
         pendingWrite = scope.launch {
             if (debounceMillis > 0) delay(debounceMillis)
-            val message = RolandSysEx.set(address, byteArrayOf(accepted.toByte()))
+            val message = RolandSysEx.set(address, MidiBytes.encode(accepted, byteWidth))
             val sent = link.send(message)
             onDiagnostic("SET $address = $accepted ${if (sent) "OK" else "FALLÓ"}")
         }
@@ -113,7 +124,8 @@ sealed class KatanaControl(
      */
     internal fun applyIncoming(data: RolandMessage.Data): Boolean {
         if (data.address != address) return false
-        val value = data.data.firstOrNull()?.toInt()?.and(0xFF) ?: return false
+        if (data.data.isEmpty()) return false
+        val value = MidiBytes.decode(data.data)
         val accepted = coerce(value)
         if (accepted == null) {
             // El mensaje era para esta dirección, así que se consume igual: reenviarlo a
@@ -121,6 +133,20 @@ sealed class KatanaControl(
             onDiagnostic("entrante $address = $value fuera de las opciones conocidas")
             return true
         }
+        _state.value = accepted
+        return true
+    }
+
+    /**
+     * Applies a value read out of a memory dump.
+     *
+     * Same rules as [applyIncoming] —**never sends**, rejects what this control does not
+     * accept— but without the address check, because the caller already looked the address up.
+     *
+     * @return true if the value was taken, false if this control rejects it.
+     */
+    internal fun applyDumpValue(raw: Int): Boolean {
+        val accepted = coerce(raw) ?: return false
         _state.value = accepted
         return true
     }
@@ -133,24 +159,49 @@ sealed class KatanaControl(
 }
 
 /**
- * A continuous level, `0..100` for every one confirmed so far.
+ * A continuous level.
  *
- * Values outside [range] are clamped before anything is sent.
+ * The raw byte and the number a person sees are not always the same — see [LevelScale] — so
+ * this class has **two** faces and it matters which one a caller uses:
+ *  - [state] / [set] work in **raw bytes**, like every other control.
+ *  - [level] / [setLevel] work in **what the UI shows**, `0..100`.
+ *
+ * Anything driving a slider wants the second pair. The raw pair stays public because the
+ * diagnostics log and the tests reason in bytes, which is also the only honest way to talk
+ * about what the amplifier actually holds.
  */
 class KatanaParameter internal constructor(
     address: Address,
-    val range: IntRange,
+    /** How this level's raw byte maps to the number shown. */
+    val scale: LevelScale,
     link: KatanaLink,
     scope: CoroutineScope,
     override val debounceMillis: Long,
     onDiagnostic: (String) -> Unit,
 ) : KatanaControl(address, link, scope, onDiagnostic) {
 
-    override fun coerce(value: Int): Int = value.coerceIn(range)
+    /**
+     * What the UI shows right now, or null until the value is known.
+     *
+     * A plain computed property, **not** a derived `StateFlow`: `stateIn` would launch a
+     * collector that lives as long as the scope and that nothing ever cancels — the
+     * repository is rebuilt on every reconnect, so those irían acumulándose. Whoever needs to
+     * observe changes collects [state] and converts with [scale], which is what the ViewModel
+     * does.
+     */
+    val displayValue: Int?
+        get() = state.value?.let(scale::toDisplay)
 
-    init {
-        require(!range.isEmpty()) { "un parámetro necesita un rango no vacío" }
-    }
+    /** Sets the level from what the UI shows; the raw byte is derived through [scale]. */
+    fun setLevel(display: Int) = set(scale.toRaw(display))
+
+    /**
+     * Clamps into the raw range, but lets "off" through untouched: it sits outside the range
+     * on purpose (raw `0` while the scale runs `1..101`), and clamping it to `1` would turn a
+     * reported "apagado" into "al mínimo".
+     */
+    override fun coerce(value: Int): Int =
+        if (value == scale.offRawValue) value else value.coerceIn(scale.rawRange)
 }
 
 /**
@@ -174,7 +225,12 @@ class KatanaEnumParameter internal constructor(
     link: KatanaLink,
     scope: CoroutineScope,
     onDiagnostic: (String) -> Unit,
-) : KatanaControl(address, link, scope, onDiagnostic) {
+    /**
+     * Bytes of data at [address]. `1` for every selector except the active channel
+     * (CLAUDE.md §5.1) — see [KatanaControl]'s own `byteWidth`.
+     */
+    byteWidth: Int = 1,
+) : KatanaControl(address, link, scope, onDiagnostic, byteWidth) {
 
     init {
         require(options.isNotEmpty()) { "un selector necesita al menos una opción" }

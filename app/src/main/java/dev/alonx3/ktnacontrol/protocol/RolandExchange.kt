@@ -3,9 +3,11 @@ package dev.alonx3.ktnacontrol.protocol
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** How long to wait for the amp to answer a query before giving up on it. */
@@ -52,6 +54,63 @@ suspend fun awaitRolandReply(
         send()
         reply.await()
     }
+}
+
+/** Silencio que da por terminada una respuesta multi-mensaje. */
+const val DEFAULT_QUIET_MS = 250L
+
+/** Tope absoluto por si el amplificador no contesta o se queda a medias. */
+const val DEFAULT_COLLECT_TIMEOUT_MS = 3_000L
+
+/** Cada cuánto se mira si ya hubo silencio. */
+private const val QUIET_POLL_MS = 25L
+
+/**
+ * Envía y recoge una respuesta de **varios mensajes**, terminando en cuanto el amplificador
+ * se calla en vez de esperar siempre una ventana fija.
+ *
+ * Para el dump esa diferencia es todo: los 8 mensajes llegan en ~275 ms, así que esperar una
+ * ventana de 3 s dejaba los controles sin poblar durante 2,7 s de más — más lento que los 24
+ * GET en serie a los que sustituye, que tardaban ~540 ms.
+ *
+ * No se puede saber de antemano cuántos mensajes vendrán —depende de qué rangos estén
+ * ocupados— así que la condición de parada es **el silencio**, no una cuenta: [quietMillis]
+ * sin nada nuevo. El hueco observado entre mensajes es de ~30 ms, así que 250 ms es un
+ * margen de ocho veces.
+ *
+ * [timeoutMillis] es el tope absoluto, para cuando no llega nada en absoluto.
+ *
+ * Se suscribe con [CoroutineStart.UNDISPATCHED] antes de [send] por lo mismo que
+ * [awaitRolandReply], y necesita igualmente un stream **compartido**.
+ *
+ * @return los mensajes vistos, en orden de llegada; vacío si no llegó ninguno.
+ */
+suspend fun sendAndCollectUntilQuiet(
+    messages: Flow<ByteArray>,
+    quietMillis: Long = DEFAULT_QUIET_MS,
+    timeoutMillis: Long = DEFAULT_COLLECT_TIMEOUT_MS,
+    send: suspend () -> Unit,
+): List<ByteArray> = coroutineScope {
+    val collected = ArrayList<ByteArray>()
+    val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+        messages.collect { message -> collected.add(message) }
+    }
+    send()
+    withTimeoutOrNull(timeoutMillis) {
+        var seen = -1
+        var quietFor = 0L
+        while (quietFor < quietMillis || collected.isEmpty()) {
+            delay(QUIET_POLL_MS)
+            if (collected.size == seen) {
+                quietFor += QUIET_POLL_MS
+            } else {
+                seen = collected.size
+                quietFor = 0L
+            }
+        }
+    }
+    watcher.cancel()
+    collected
 }
 
 /**

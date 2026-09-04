@@ -50,11 +50,41 @@ object KatanaHandshake {
     /** Gap between the two sends, as in the reference library. */
     const val GAP_MS = 4L
 
-    /** `F0 7E 00 06 02 41 <modelId> 03 00 00 00 00 00 00 F7` — 15 bytes. */
-    fun message(modelId: Byte = MODEL_ID_KATANA): ByteArray = byteArrayOf(
-        0xF0.toByte(), 0x7E, 0x00, 0x06, 0x02, 0x41, modelId, 0x03,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF7.toByte(),
-    )
+    /**
+     * Los cuatro bytes de versión de firmware que trae la trama de la librería de referencia:
+     * todo a cero.
+     */
+    val VERSION_GENERIC: ByteArray = byteArrayOf(0x00, 0x00, 0x00, 0x00)
+
+    /**
+     * Los cuatro bytes de versión que **el amplificador real devolvió** en su Identity Reply
+     * (2026-09-02): `F0 7E 00 06 02 41 33 03 00 00 06 00 00 00 F7`.
+     *
+     * Es el único byte en que la trama que enviamos difiere de la que el amp emite, y por eso
+     * es la única hipótesis que quedaba viva para el handshake mudo (CLAUDE.md §4.1).
+     */
+    val VERSION_REPORTED: ByteArray = byteArrayOf(0x06, 0x00, 0x00, 0x00)
+
+    /**
+     * `F0 7E 00 06 02 41 <modelId> 03 00 00 <version×4> F7` — 15 bytes.
+     *
+     * Tiene forma de Identity **Reply**, no de Request: es lo que hace la librería de
+     * referencia (`MS3.h`, `setEditorMode()`).
+     */
+    fun message(
+        modelId: Byte = MODEL_ID_KATANA,
+        version: ByteArray = VERSION_GENERIC,
+    ): ByteArray {
+        require(version.size == VERSION_LENGTH) {
+            "la versión son $VERSION_LENGTH bytes, no ${version.size}"
+        }
+        return byteArrayOf(
+            0xF0.toByte(), 0x7E, 0x00, 0x06, 0x02, 0x41, modelId, 0x03, 0x00, 0x00,
+        ) + version + 0xF7.toByte()
+    }
+
+    /** Longitud del campo de versión de firmware. */
+    const val VERSION_LENGTH = 4
 }
 
 /** A single line of the on-screen console. */

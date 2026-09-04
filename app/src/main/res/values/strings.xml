@@ -8,6 +8,7 @@
     <string name="debug_connection_menu">\u2630</string>
     <string name="debug_connection_scan">Buscar</string>
     <string name="debug_connection_handshake">Handshake</string>
+    <string name="debug_connection_handshake_real_version">Handshake v-real</string>
     <string name="debug_connection_identity_request">Identity</string>
     <string name="debug_connection_read_device_name">Nombre</string>
     <string name="debug_connection_read_preset_names">Presets</string>
@@ -27,6 +28,35 @@
     <string name="debug_connection_delay_level">Delay: %1$s</string>
     <!-- Botón junto a cada slider: relee el parámetro desde el amplificador. -->
     <string name="debug_connection_read_level">GET</string>
+
+    <!-- Sección de sliders: nombres de efecto y controles de tipo selector -->
+    <string name="effect_boost">Boost</string>
+    <string name="effect_mod">Mod</string>
+    <string name="effect_fx">FX</string>
+    <string name="effect_delay">Delay</string>
+    <string name="effect_reverb">Reverb</string>
+    <string name="section_amp">Amplificador</string>
+    <string name="section_effects">Efectos</string>
+    <string name="section_channel">Canal</string>
+    <string name="channel_panel">Panel</string>
+    <string name="channel_bank_a">A%1$d</string>
+    <string name="channel_bank_b">B%1$d</string>
+    <string name="amp_category">Perilla AMP TYPE</string>
+    <string name="amp_type">Modelo de amplificador</string>
+    <string name="amp_variation">Variación</string>
+    <string name="effect_color">Color</string>
+    <string name="effect_type">Tipo</string>
+    <!-- Parámetros internos de Booster, CLAUDE.md §5.2 -->
+    <string name="booster_drive_level">Drive: %1$s</string>
+    <string name="booster_bottom_level">Bottom: %1$s</string>
+    <string name="booster_tone_level">Tone: %1$s</string>
+    <string name="booster_solo">Solo</string>
+    <string name="booster_solo_level">Solo Level: %1$s</string>
+    <string name="booster_effect_level">Effect Level: %1$s</string>
+    <string name="booster_direct_mix_level">Direct Mix: %1$s</string>
+    <string name="color_green">Verde</string>
+    <string name="color_red">Rojo</string>
+    <string name="color_yellow">Amarillo</string>
     <string name="debug_connection_log_copied">Log copiado</string>
     <string name="debug_connection_empty_log">Sin actividad todavía.</string>
     <string name="debug_connection_state_idle">Sin conectar</string>

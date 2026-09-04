@@ -1,10 +1,12 @@
 package dev.alonx3.ktnacontrol.protocol
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -144,5 +146,59 @@ class RolandExchangeTest {
         }
 
         assertEquals(1, seen.size)
+    }
+
+    // --- sendAndCollectUntilQuiet ------------------------------------------------------
+
+    @Test
+    fun `collecting stops as soon as the amp goes quiet`() = runBlocking {
+        val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 16)
+        val started = System.currentTimeMillis()
+
+        val collected = sendAndCollectUntilQuiet(
+            messages = messages,
+            quietMillis = 150L,
+            timeoutMillis = 5_000L,
+        ) {
+            // Tres mensajes seguidos, como los trozos del dump.
+            repeat(3) { index ->
+                messages.emit(byteArrayOf(0xF0.toByte(), index.toByte(), 0xF7.toByte()))
+                delay(20)
+            }
+        }
+        val elapsed = System.currentTimeMillis() - started
+
+        assertEquals(3, collected.size)
+        assertTrue("debe cortar por silencio, no agotar los 5 s (tardó $elapsed ms)", elapsed < 2_000)
+    }
+
+    @Test
+    fun `collecting gives up on the timeout when nothing ever arrives`() = runBlocking {
+        val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
+
+        val collected = sendAndCollectUntilQuiet(
+            messages = messages,
+            quietMillis = 100L,
+            timeoutMillis = 200L,
+        ) { /* no se envía nada */ }
+
+        assertTrue("sin respuesta debe devolver vacío, no colgarse", collected.isEmpty())
+    }
+
+    @Test
+    fun `a late message still counts if it arrives before the quiet window closes`() = runBlocking {
+        val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
+
+        val collected = sendAndCollectUntilQuiet(
+            messages = messages,
+            quietMillis = 300L,
+            timeoutMillis = 5_000L,
+        ) {
+            messages.emit(byteArrayOf(0x01))
+            delay(150) // menos que el silencio: la recogida sigue abierta
+            messages.emit(byteArrayOf(0x02))
+        }
+
+        assertEquals(2, collected.size)
     }
 }

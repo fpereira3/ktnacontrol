@@ -286,32 +286,435 @@ seguimiento, no repite lo que ya está ahí.
     (`60 00 06 51`–`06 5B`): Gain, Volume, Bass, Middle, Treble, Presence, Boost, Mod, FX,
     Delay, Reverb. Solo queda `60 00 06 50` (Amp Type), que no es un nivel — ver «Por hacer».
 
+- **2026-09-03** — **Investigación completa de los controles tipo enum**, con cita de fichero
+  y línea para cada dato (CLAUDE.md §5). Resultados que corrigen o amplían lo que había:
+  - **Amp Type son dos direcciones, no una.** `60 00 06 50` es la **posición de la perilla**
+    (`00`..`04`, cinco categorías) y `60 00 00 21` el **modelo** (30 valores con huecos).
+    `amplifier.yaml:3` llama a la primera `am_num`. Se cablean las dos para distinguirlo en
+    una sola sesión.
+  - **La tabla de tipos de `midi.xml` tiene 30 entradas, no 29**: a `amplifier.yaml` y a
+    `Adresses.txt` les falta **BG Lead (`0x10`)**. Hay un 31.º, `0x19` "Custom", que solo
+    aparece en el bloque de conversión y no en la tabla de la dirección — documentado y
+    excluido.
+  - **`60 00 06 39` es de Boost, no de Reverb.** No era un error de transcripción:
+    `midi.xml` lo llama `Booster GRY color select` y `Adresses.txt:70` lo pone dentro de la
+    sección BOOSTER. El color de Reverb en Mk2 es `60 00 06 3D`.
+  - **Nada del color estaba confirmado**, al contrario de lo que se creía al empezar. La
+    dirección que había en el proyecto como `REVERB_ACTIVE_COLOR` (`60 00 12 14`) resultó ser
+    del mapa **MK1** — `color_assign.json:74-84` la define como parte de `colorActiveIndex`,
+    `60 00 12 10`–`14`—, y solo se usaba como vector de checksum en un test. Renombrada a
+    `EFFECT_COLOR_MK1` y conservada como plan B.
+  - **On/off de reverb encontrado donde no lo había**: `60 00 05 40`, que `Adresses.txt` no
+    menciona y solo dan `reverb.yaml:2` y `midi.xml`.
+
+- **2026-09-03** — **`KatanaEnumParameter`, el segundo tipo de control** (CLAUDE.md §4.3).
+  Se extrajo de `KatanaParameter` la maquinaria común a una base sellada `KatanaControl`
+  —caché, GET, SET optimista, regla anti-eco— y cuelgan de ella los dos tipos: continuo
+  (clampea, con debounce) y selector (rechaza lo que no está en su lista, sin debounce).
+  Tablas de valores `AmpType` / `AmpCategory` / `EffectColor` en `protocol/`, Kotlin puro.
+  **18 tests nuevos** (98 en total, todos pasan): tablas bien formadas, los bytes de cada
+  familia de SET, rechazo de valores ilegales, y que selectores y niveles no se pisen.
+
+- **2026-09-03** — **UI de la sección Sliders reorganizada**: una sección de amplificador
+  (categoría en chips, modelo en desplegable, variación, y los seis niveles de amp/EQ) y una
+  **tarjeta por efecto** con su on/off, sus tres chips de color y su slider. Un banner dice
+  que los selectores están sin confirmar, para que un control que no responde no se lea como
+  app rota. Ningún selector aparece preseleccionado hasta que el amp responde: con una
+  dirección sin confirmar, el estado honesto es "desconocido".
+
+- **2026-09-03 — ✅ Los selectores confirmados con el amplificador, salvo uno.** Funcionan
+  **on/off y color de los cinco efectos** (y reportan: pulsar el botón físico actualiza la
+  app), **el cambio de canal por perilla** (`60 00 06 50`, cinco categorías) y **la lista
+  completa de modelos** (`60 00 00 21`, los cinco base más variaciones más "sneaky amps").
+  - **Dos reglas de trabajo implícitas quedan derogadas.** Se había asumido que solo el
+    bloque alto `60 00 06 5x` era escribible, porque era lo único confirmado hasta ahora. No
+    es así: las diez direcciones de color y on/off, más `60 00 00 21`, son todas "bajas" y
+    funcionan. Ese bloque no tiene nada de especial — es simplemente donde están las
+    **perillas del panel**.
+  - Y queda resuelta la duda del sentido de los on/off: **`00` apaga, `01` enciende**, como
+    en todo lo demás. La lectura literal de `Adresses.txt:81` (`[00|01] # [ON|OFF]`) era
+    engañosa.
+
+- **2026-09-03 — ❌ `60 00 06 5C` (variación) es de SOLO LECTURA, y arreglado por otra vía.**
+  Reporta bien —el botón físico actualiza la app al instante— pero ignora la escritura.
+  - **El síntoma es reconocible y conviene recordarlo**: al mover el switch se encendía y
+    **volvía solo a apagado**. No era un fallo del control sino la app funcionando bien: la
+    escritura optimista pone la caché en `01`, el amp ignora el SET y sigue reportando su `00`
+    real por esa misma dirección, y el camino de mensajes espontáneos lo aplica. **Un valor
+    que rebota solo es la firma de una dirección de solo reporte.** Solo se ve porque el edit
+    mode y la actualización desde el amp están cableados.
+  - `midi.xml:44107-44110` la etiqueta `abbr="led state"` —estado de un LED, no un control—,
+    que en retrospectiva ya lo decía. Lo mismo cabe esperar de `06 5D`–`06 61`.
+  - **Arreglo sin buscar otra dirección de variación**: los cinco canales base tienen su
+    gemelo `Var [...]` (`0x1C`–`0x20`) en la lista de modelos, que sí acepta escritura. El
+    switch ahora **lee `06 5C` y escribe `00 21`**. Es un caso real de "leer en una dirección
+    y escribir en otra" — el patrón que se descartó para el reverb por ser una suposición; la
+    diferencia es que aquí está **medido** en las dos direcciones.
+  - `AmpCategory` gana `baseValue` / `variationValue` / `typeValue(variation)` y `AmpType`
+    gana `category` / `isVariation`. **6 tests nuevos** (104 en total, todos pasan).
+
+- **2026-09-03 — ✅ Switch de VARIATION funcionando**, escribiendo por el modelo
+  (`60 00 00 21`) en vez de por `60 00 06 5C`. Confirmado con el amplificador. Se mantiene
+  deshabilitado con los "sneaky amps" seleccionados — y resultó ser lo correcto por una razón
+  que no conocía al decidirlo: **esos modelos se rompen si se les activa la variación o se
+  cambia de canal**, según el dueño del amplificador.
+
+- **2026-09-03 — ✅ Corregida la escala de los cinco niveles de efecto: `0` = Off y `1..101`.**
+  `LevelScale` (Kotlin puro, 9 tests) traduce entre el byte crudo y lo que se muestra, y
+  `KatanaParameter` gana la cara de display (`displayValue` / `setLevel`) junto a la cruda
+  (`state` / `set`). Los seis niveles de amp/EQ siguen con crudo = mostrado.
+  - **Cierra el síntoma del rango que se había atribuido a holgura mecánica**: el slider
+    llegaba a 100 con la perilla física un pelo antes del tope porque el crudo 100 que mandaba
+    la app es el 99 del amplificador. La "suposición razonada" del rango lo era, y estaba
+    desplazada en uno.
+  - Corroborado de forma independiente por la UI de PC de **Boss Tone Studio**, que muestra
+    esos cinco como "Off" y luego 0..100, además de por `midi.xml:44088-44106`.
+  - Los once `*_LEVEL_RANGE` se sustituyen por dos escalas, `PANEL_LEVEL_SCALE` y
+    `EFFECT_LEVEL_SCALE`: la discusión del rango estaba repetida once veces y ahora vive en
+    dos sitios. **117 tests, todos pasan.**
+
+- **2026-09-03 — ✅ La escala corregida verificada en el amplificador.** Con el slider al 100,
+  el hueco que quedaba hasta el tope de la perilla física **se redujo**, que es exactamente lo
+  que predice haber quitado un paso de desfase.
+  - **Y queda explicado lo que sobra.** El hueco no desapareció del todo, pero no hace falta
+    un segundo desfase para justificarlo: **Presence (`60 00 06 56`) tiene escala directa,
+    nunca estuvo desplazado, y mostraba el mismo hueco desde el principio**. Eran dos cosas
+    sumadas —un desfase de software y holgura mecánica del potenciómetro— y solo la primera
+    era arreglable.
+  - Con esto se cierra una duda que llevaba abierta desde el 2026-09-03 por la mañana, cuando
+    se decidió "dar el rango por bueno" sin poder distinguir las dos causas.
+
+- **2026-09-03 — Decisión cerrada: no se usa kshoji/USB-MIDI-Driver ni ninguna librería MIDI
+  de terceros** (CLAUDE.md §6). Llevaba tiempo como "recomendación pendiente de confirmar";
+  ahora es una constatación, no una predicción, porque **el transporte y el protocolo enteros
+  están implementados y probados contra el amplificador sin ella**.
+  - Lo que aportaría —enumeración, permisos, `claimInterface`, bucles de `bulkTransfer`,
+    empaquetado USB-MIDI— son unas decenas de líneas en `usb/`, con tests JVM propios.
+  - **El handshake es específico de Boss** y no lo cubre ninguna librería genérica: habría que
+    añadirlo por fuera igual.
+  - Añadiría su abstracción de "puertos MIDI" encima de `KatanaLink` / `KatanaControl`, que ya
+    existe y es más pequeña.
+  - No se descarta por principio: si algún día hay que hablar con otros dispositivos MIDI
+    class-compliant, la evaluación se rehace.
+
+- **2026-09-03 — ✅ La escala `Off + 1..101` confirmada por lo que el amplificador reporta**,
+  no solo por documentación. En la lectura inicial al conectar:
+  - **Reverb reportó crudo `101`** (`0x65`) → mostrado 100. El tope del rango es real y es el
+    que dice `midi.xml`. Esta era exactamente la prueba anotada como pendiente desde el
+    principio —"girar la perilla al tope con edit mode y leer lo que reporta"—, resuelta sin
+    tener que girar nada.
+  - **El `0` es Off de verdad**: los tres efectos con nivel crudo `0` (Boost, Mod, FX)
+    reportaron su on/off en `0`, y los dos con nivel distinto de cero (Delay 78, Reverb 101)
+    lo reportaron en `1`. Cinco pares de direcciones independientes con correlación perfecta.
+    Es una sola muestra: corrobora fuerte, no demuestra. Falta ver un efecto **encendido y al
+    mínimo**, que debería reportar crudo `1`.
+
+- **2026-09-03 — Handshake: investigación CERRADA.** Se probó la última hipótesis —la trama
+  con los bytes de versión de firmware que el propio amplificador reporta, byte a byte
+  idéntica a su Identity Reply— y **tampoco respondió**:
+
+  ```
+  → F0 7E 00 06 02 41 33 03 00 00 06 00 00 00 F7   (x2, ~4 ms, 20 B en el cable cada una)
+  ← nada
+  ```
+
+  - El criterio de cierre estaba **fijado antes de ver el resultado**, que es lo que hace que
+    este "no" cuente. Queda cerrado, **no** en "baja prioridad": ningún flujo implementado lo
+    necesita, y no se retoma salvo que aparezca una razón concreta.
+  - El botón «Handshake v-real» se conserva en la pantalla de diagnóstico para poder
+    reproducir la prueba, no como tarea pendiente.
+  - Ramas sin explorar, anotadas por si algún día hace falta: que el Katana simplemente no lo
+    necesite (el handshake viene de `MS3.h`, para el **MS-3**, con model id `3B`), que
+    responda por un endpoint o interfaz que no miramos, o que la trama lleve algo más que no
+    está en la librería de referencia.
+
+- **2026-09-03 — ✅ HECHO Y VERIFICADO: el estado se puebla con un dump, no con 24 GET en
+  serie.** `protocol/MemoryDump.kt` (Kotlin puro, 9 tests) indexa por dirección los trozos que
+  devuelve el amp; `device/model/AmpState.kt` (10 tests) es la instantánea de dominio de los
+  24 parámetros; `KatanaRepository.loadFromDump()` los junta y deja un GET individual solo
+  para lo que el dump no cubra. **143 tests, todos pasan.**
+
+  **Resultado contra el amplificador real:**
+  - **24 de 24 controles poblados del dump, 0 con GET de respaldo.** 8 mensajes, 1860 B.
+  - **Valores idénticos a los de la lectura individual previa**: gain 58, volume 100,
+    EQ 38/43/45/65, delay 77, reverb 100, Brown, delay on/amarillo, reverb on/verde. El
+    bloque de perillas `06 50`–`06 5B` cae en el trozo que empieza en `60 00 05 53`, offset
+    125.
+  - Se resuelven dos incógnitas que se habían anotado antes de probar: **los on/off y el
+    modelo de amplificador sí vienen en el dump**, pese a ser direcciones "bajas".
+
+  **Latencia, en tres actos:**
+
+  | | Peticiones | Tiempo hasta poblar |
+  | --- | --- | --- |
+  | 24 GET en serie | 24 | 539 ms |
+  | Dump, 1.ª versión | 1 | **3013 ms** ❌ |
+  | Dump, corregido | 1 | **~300 ms** ✅ |
+
+  La primera versión esperaba siempre la ventana fija de 3 s aunque los 8 mensajes llegaran
+  en 275 ms — o sea que **empeoraba** justo la métrica que quería mejorar.
+  `sendAndCollectUntilQuiet` corta tras ~250 ms de silencio (el hueco entre mensajes es de
+  ~30 ms) con tope de 3 s. Confirmado en el amplificador: el resumen aparece a los ~300 ms.
+
+  **Detalles de diseño que conviene no perder:**
+  - **El dump no es un bloque contiguo** y el código no lo asume: varios mensajes con su
+    propia base y longitud, y ni el número ni el total son fijos. Una dirección ausente es
+    `null` —respuesta normal—, no un error.
+  - **Aplicar el dump recorre la lista de controles del repositorio**, no los campos de
+    `AmpState`. Así añadir un parámetro no puede dejarse a medias: no hay volcado que
+    actualizar.
+  - Los niveles salen de `AmpState` ya en unidades de presentación, con el desplazamiento de
+    los cinco efectos aplicado.
+  - **Menos ruido en el log**: los trozos del dump ya no salen como `entrante … sin control
+    asociado`. Un control es un byte; un mensaje más largo es un bloque.
+
+- **2026-09-03 — ✅ Selector de canal/preset activo, confirmado con el amplificador real en
+  las dos direcciones.** Dirección `00 01 00 00` (`KatanaAddresses.ACTIVE_CHANNEL`), 9 valores
+  `0`..`8` (Panel + Banco A 1-4 + Banco B 1-4), siguiendo al pie la investigación de CLAUDE.md
+  §5.1. **Escritura**: elegir un chip en la app cambia el canal real del amplificador, en los
+  8 canales (1A–4A, 1B–4B) más Panel. **Lectura/reporte**: cambiar de canal físicamente en el
+  amplificador actualiza el chip seleccionado en la app. Confirma de una vez la dirección, los
+  9 valores, que el SET de 2 bytes funciona (nunca se probó uno de 1) y que el reporte
+  espontáneo llega igual que con el resto de selectores.
+  - Reutiliza `KatanaEnumParameter` —caché, GET, SET optimista, regla anti-eco— igual que el
+    resto de selectores; chip en la sección Sliders, sección propia "Canal", sin botón GET
+    explícito (igual que amp category/type/variation: se puebla por el GET de respaldo del
+    dump y por el reporte espontáneo).
+  - **Generalizado `KatanaControl` a un `byteWidth` configurable** en vez de crear un tipo
+    nuevo. Es el único control de todo el proyecto cuyo dato son 2 bytes
+    (`CURRENT_PRESET_LEN = 0x02` en `globals.py:15`, frente a 1 byte en todo lo demás), así
+    que la maquinaria de caché/GET/SET/anti-eco se generalizó con un parámetro `byteWidth: Int
+    = 1` (por defecto 1, cero cambios de comportamiento para los 24 controles existentes) en
+    vez de duplicar esa maquinaria en una clase aparte. `read()`/`set()`/`applyIncoming()`
+    pasaron de `byteArrayOf(x.toByte())` / `data.firstOrNull()` a
+    `MidiBytes.encode/decode(_, byteWidth)`, que ya eran genéricos en N bytes y no necesitaron
+    tocarse. El filtro de `KatanaRepository.onIncoming` que descartaba bloques largos pasó de
+    "`!= 1` byte" a "`!in 1..2` bytes".
+  - **Resuelto**: el SET de 2 bytes funciona tal cual, así que la duda de si 1 byte también
+    habría bastado queda cerrada sin necesidad de probarlo — no hacía falta.
+
+- **2026-09-03 — ✅ Tipo de efecto por slot de color: resuelto en Booster, extendido a Mod y
+  FX.** Era el bloque 1 del roadmap y bloqueaba todo el tuning avanzado.
+  - **La duda que ninguna fuente respondía —¿se escribe en el slot de color (`60 00 06 24`) o
+    en el "tipo activo" (`60 00 00 11`)?— la contestó el amplificador: manda la de tipo
+    activo.** Confirmado con audio: cambiar el tipo cambia el sonido, se corresponde con el
+    color encendido en el panel, y sincroniza en las dos direcciones (tocar el color o el tipo
+    en el amp actualiza la app, y al revés).
+  - El precedente que obligaba a instrumentar las dos —`60 00 06 5C`, del mismo bloque `06 xx`
+    y de solo lectura— **no se repitió**, y encima al revés de lo esperado: allí mandaba la
+    alta, aquí la baja. Tercera vez que dos direcciones plausibles solo se distinguen probando
+    (reverb, Gain, y ahora esta).
+  - **Implementado**: `BoostType` (23 valores, hueco real en `0x07`) y `ModFxType` (31 valores,
+    diez huecos), este último **compartido por Mod y FX porque son literalmente la misma lista**
+    en las dos fuentes — `mod.yaml:11-42` = `fx.yaml:11-42`, y los bloques de `midi.xml`
+    diffean limpio. Nueve controles nuevos de slot de color (3 efectos × 3 colores) que no se
+    escriben pero vienen en el dump y reportan.
+  - **UI**: desplegable de tipo dentro de la tarjeta de cada efecto, justo bajo los chips de
+    color, porque son lo mismo visto de dos maneras: el color elige el slot y el tipo dice qué
+    hay dentro. Se retiró el andamiaje del experimento (los cuatro GET y el botón de reintento)
+    ahora que la pregunta está cerrada.
+  - ⚠️ Mod y FX **sin confirmar todavía**: usan la dirección gemela de la de Booster. Pruebas
+    concretas en "Pendiente por probar".
+
+- **2026-09-04 — ⚠️ Tipo de efecto extendido a Delay y Reverb — implementado, sin confirmar
+  todavía.** Mismo patrón exacto que Booster: se escribe en la dirección de "tipo activo"
+  (`DELAY_TYPE_ACTIVE` `60 00 05 01`, `REVERB_TYPE_ACTIVE` `60 00 05 41`), no en el slot de
+  color. `DelayType` (11 valores, `00`-`0A`, sin huecos) y `ReverbType` (7 valores, `00`-`06`,
+  sin huecos), los dos con dos fuentes de Mk2 de acuerdo. Slots de color por si acaso
+  (`DELAY_TYPE_BY_COLOR` `06 2D`-`2F`, `REVERB_TYPE_BY_COLOR` `06 30`-`32`), mismo desplegable
+  en la tarjeta de cada efecto que ya tenían Booster/Mod/FX. Con esto **los cinco efectos
+  tienen tipo cableado**; no se tocaron los parámetros internos de ningún tipo (tarea aparte).
+  - ⚠️ **Sin confirmar todavía**: es la misma extrapolación que ya se hizo con Mod y FX —
+    dirección gemela de la confirmada, sin haberla probado. Prueba concreta en "Pendiente por
+    probar".
+
+- **2026-09-03 — ⚠️ Recarga completa del estado al cambiar de canal — implementado, sin
+  confirmar todavía.** Cada canal (1A–4A, 1B–4B, PANEL) tiene sus propios valores, así que sin
+  esto la app seguía mostrando los del canal anterior — peor que no mostrar nada, porque
+  parece que el amplificador dice una cosa cuando dice otra. Al detectar un cambio en el canal
+  activo se relee **el dump entero**, que ya cubre de una sola petición todos los controles
+  registrados (niveles, modelo de amplificador, colores, on/off y tipos de efecto). Prueba
+  concreta en "Pendiente por probar".
+  - **Da igual quién cambió el canal**: se observa el estado del control, así que entra tanto
+    el cambio desde la app como el del footswitch físico.
+  - **No hay bucle**: el canal vive en `00 01 00 00`, fuera del dump, así que recargar no lo
+    reescribe; y un `StateFlow` no reemite un valor igual, así que el GET de respaldo que lo
+    relee no dispara otra recarga.
+  - **`collectLatest` + 300 ms de margen**: pasar 1A→2A→3A rápido hace **una** recarga, la del
+    canal donde te quedaste. El margen además le da tiempo al amp a cambiar de canal de verdad
+    antes de preguntarle en qué estado quedó.
+
+- **2026-09-04 — ⚠️ Los 9 parámetros internos de Booster (`60 00 00 10`–`18`) — implementados,
+  pendientes de confirmar con audio.** Drive, Bottom, Tone, Solo Sw, Solo Level, Effect Level
+  y Direct Mix son nuevos (On/Off y Type ya estaban). CLAUDE.md §5.2, dos fuentes de Mk2 de
+  acuerdo en las siete direcciones (`booster.yaml:4-9`, `midi.xml:37109-37304`).
+  - **`60 00 00 12` estaba mal etiquetada desde antes**: se documentaba como `BOOST_LEVEL_LOW`,
+    "alternativa baja de la perilla del panel, sin probar". Con el bloque interno completo
+    entendido, no es una alternativa a nada — es Drive, el parámetro de distorsión del propio
+    Booster. Renombrada a `BOOST_DRIVE`, sin cambiar la dirección.
+  - **Bottom/Tone no necesitaron tocar `LevelScale`**: son un rango centrado (`00/64` mostrado
+    `-50..+50`, `midi.xml`), y el `rawOffset` que ya tenían `direct`/`offThenOneBased` es
+    exactamente `raw = display + 50`. Solo hizo falta una tercera factoría,
+    `LevelScale.centered(radius)`, sin añadir ningún campo a la clase — confirma la sospecha
+    con la que se pidió esta tarea.
+  - **UI**: los seis sliders (Drive 0-120, Bottom/Tone -50..+50, Solo/Effect/Direct Mix 0-100)
+    y el switch de Solo se añadieron dentro de la tarjeta de Booster, debajo de su nivel de
+    panel — visibles solo para ese efecto, ya que ningún otro tiene sus parámetros internos
+    cableados todavía (bloque 2 del roadmap). `LevelControl` ganó un parámetro `valueRange`
+    con default `0f..100f`, así que los sliders existentes no cambiaron.
+  - **Custom Type y sus cinco parámetros (`60 00 00 19`–`1E`) quedan sin implementar a
+    propósito**: es el modo "pedal custom", con su propio sub-catálogo, y menos prioritario.
+
+- **2026-09-04 — Mapa de parámetros internos de Mod y FX: extracción documental completa.**
+  Tarea **sin código** por encargo explícito: dejar el XML leído de una vez para que cablear
+  cada tipo después sea mecánico. Documentado en CLAUDE.md §5.2, "El mapa de parámetros
+  internos de Mod y FX". Cierra el punto 2 de "lo que las fuentes no responden" de esa sección.
+  - **Los 31 bloques indexados**, en el mismo orden que `ModFxType` (comprobado entrada por
+    entrada contra `ModFxType.kt`, no supuesto), con dirección inicial y final, número de
+    parámetros y el `desc` que los agrupa en `midi.xml`.
+  - **Cuatro tipos extraídos parámetro a parámetro** con dirección, nombre, rango y línea:
+    Tremolo (el caso mínimo, 4 niveles directos), Phaser, Flanger y 2x2 Chorus.
+  - **Regla FX = Mod + `0x0200`**, verificada mecánicamente sobre los 237 nodos de cada bloque
+    —no inferida de unas muestras—: comparados `(LSB relativa, 4.º byte, tipo, parámetro)`,
+    los dos salen idénticos salvo 14 diferencias **solo de etiqueta**. Extraer FX aparte sería
+    trabajo tirado.
+  - **Seis anomalías señaladas explícitamente**, que hay que resolver antes de cablear los
+    tipos afectados. La que más pesa: **`Pre Delay` (`range 00/50/0.0/40.0`, en pasos de
+    0,5 ms) no es representable con la `LevelScale` actual**, que solo sabe desplazar con un
+    entero — habría que darle un factor de escala. Las otras: parámetros de 2 bytes en Pitch
+    Shifter y Harmonist (ya cubiertos por el `byteWidth = 2` del canal), las 24 direcciones de
+    escala de usuario del Harmonist, Acu Processor cruzando el límite de página `01 7F`→`02 00`,
+    y los nombres repetidos sin desambiguar en 2x2 Chorus y DC30.
+
 ## En progreso
 
 
+## Pendiente por probar
+
+Lo que está **implementado pero todavía no confirmado contra el amplificador real**. Cada
+entrada dice en qué consiste la prueba y qué resultado cuenta como éxito, siguiendo la
+disciplina de siempre (CLAUDE.md §5): nada se da por bueno hasta oírlo o verlo en el amp.
+
+1. **Tipo de MOD** (`60 00 01 01`, catálogo `ModFxType`, 31 valores).
+   - **Prueba**: con el efecto MOD encendido, cambiar su tipo desde el desplegable de la
+     tarjeta de la app (por ejemplo, de "2x2 Chorus" a "Phaser"). Por separado, cambiar el
+     color de MOD directamente con el botón físico del panel.
+   - **Resultado esperado si funciona** (mismo patrón que Booster, ya confirmado):
+     - El carácter del efecto cambia de forma audible y reconocible al tipo elegido — un
+       Chorus se oye como modulación en coro, un Phaser como un barrido de fase. Esto es lo
+       único que decide; un GET que devuelve lo escrito no prueba nada (§5).
+     - Al pulsar el botón físico de color de MOD, el desplegable de tipo de la app cambia
+       solo al tipo que tiene asignado ese color (reporte espontáneo, con edit mode activo).
+   - **Si falla** (no cambia el sonido, o el valor rebota al anterior): es la firma de una
+     dirección de solo reporte, igual que pasó con `60 00 06 5C` — documentar y reabrir la
+     duda de si hay que escribir en el slot de color (`60 00 06 27`/`28`/`29`) en su lugar.
+
+2. **Tipo de FX** (`60 00 03 01`, mismo catálogo `ModFxType`).
+   - **Prueba y resultado esperado**: igual que el punto 1, pero con el efecto FX y sus
+     colores (`60 00 06 2A`/`2B`/`2C`).
+
+3. **Tipo de Delay 1** (`60 00 05 01`, catálogo `DelayType`, 11 valores).
+   - **Prueba**: con el efecto Delay encendido, cambiar su tipo desde el desplegable de la
+     app (por ejemplo, de "Digital" a "Analog"). Por separado, cambiar el color de Delay con
+     el botón físico del panel.
+   - **Resultado esperado si funciona**: un delay analógico suena claramente distinto a uno
+     digital — más cálido, con más pérdida de tonos agudos en las repeticiones —, así que el
+     cambio de carácter debe ser reconocible al oído. El desplegable debe sincronizarse solo
+     al cambiar de color en el panel físico (reporte espontáneo).
+   - **Si falla**: mismo diagnóstico que en los puntos 1 y 2 — sospechar de dirección de solo
+     reporte y considerar el slot de color (`60 00 06 2D`/`2E`/`2F`) como alternativa.
+
+4. **Tipo de Reverb** (`60 00 05 41`, catálogo `ReverbType`, 7 valores).
+   - **Prueba**: con el efecto Reverb encendido, cambiar su tipo desde el desplegable de la
+     app (por ejemplo, de "Plate" a "Hall 1"). Por separado, cambiar el color de Reverb con
+     el botón físico del panel.
+   - **Resultado esperado si funciona**: un reverb de plate suena metálico y denso desde el
+     principio; uno de hall tiene una cola más larga y difusa, con un ataque más suave — la
+     diferencia debe notarse de inmediato al escuchar. Igual que arriba, el desplegable debe
+     seguir los cambios de color hechos en el panel físico.
+   - **Si falla**: mismo diagnóstico; la alternativa sería el slot de color
+     (`60 00 06 30`/`31`/`32`).
+
+5. **Los 9 parámetros internos de Booster** (`60 00 00 10`–`18`, CLAUDE.md §5.2). On/Off y
+   Type ya están confirmados; lo que sigue prueba los siete nuevos.
+   - **Drive** (`60 00 00 12`, `0..120`).
+     - **Prueba**: mover el slider de Drive de 0 a 120 con Booster encendido.
+     - **Resultado esperado si funciona**: el nivel de distorsión/saturación del Booster
+       aumenta de forma audible y progresiva — de un sonido limpio a uno claramente saturado.
+   - **Bottom y Tone** (`60 00 00 13`/`14`, `-50..+50` centrados en cero).
+     - **Prueba**: mover cada slider de un extremo a otro por separado, con Booster encendido
+       y a un Drive intermedio para que el timbre se note.
+     - **Resultado esperado si funciona**: Bottom cambia la coloración de graves del boost
+       (más grave hacia `-50`, menos hacia `+50`, o viceversa); Tone hace lo mismo con los
+       agudos. En `0` debería sonar como el punto neutro documentado por las fuentes.
+   - **Solo Sw y Solo Level** (`60 00 00 15`/`16`).
+     - **Prueba**: activar el switch de Solo y mover el slider de Solo Level de 0 a 100.
+     - **Resultado esperado si funciona**: activar Solo cambia el nivel de salida del Booster
+       de forma audible (es el "modo solo" para resaltar el instrumento), y el slider ajusta
+       cuánto sube ese nivel.
+   - **Effect Level y Direct Mix** (`60 00 00 17`/`18`).
+     - **Prueba**: con Booster encendido, mover Effect Level de 0 a 100 y por separado Direct
+       Mix de 0 a 100.
+     - **Resultado esperado si funciona**: Effect Level cambia cuánta señal procesada por el
+       Booster se oye (en 0, el efecto casi desaparece); Direct Mix cambia el balance entre
+       la señal procesada y la señal limpia sin procesar — en un extremo debería oírse solo
+       una, en el otro solo la otra.
+   - **Si falla cualquiera** (no cambia el sonido, o el valor rebota al anterior): mismo
+     diagnóstico que en los demás casos — dirección de solo reporte, como `60 00 06 5C`.
+
+6. **Recarga completa del estado al cambiar de canal.**
+   - **Prueba**: con presets distintos guardados en al menos dos canales (por ejemplo 1A y
+     2A con modelos de amplificador o efectos distintos), cambiar de canal desde el selector
+     de la app y observar el log y los controles. Repetir cambiando de canal con el
+     footswitch físico del amplificador, sin tocar la app. Repetir una tercera vez pasando
+     rápido por varios canales seguidos (p. ej. 1A→2A→3A sin pausas).
+   - **Resultado esperado si funciona**:
+     - Tras cada cambio aparece en el log `↻ Canal X: releyendo todo el estado...` seguido
+       del resumen del dump (mensajes, bytes, controles poblados).
+     - Todos los sliders y selectores —modelo de amplificador, colores, on/off, tipos de
+       efecto— muestran los valores reales del canal nuevo, no los del anterior.
+     - El cambio por footswitch físico dispara la misma recarga que el cambio desde la app.
+     - Pasar rápido por varios canales produce **una sola** recarga, la del canal donde se
+       queda al final — no una por cada canal intermedio.
+   - **Si falla**: revisar en el log si `repository.channel.state` sí cambia (el chip de
+     canal de la app se mueve) pero no aparece la línea de recarga — apuntaría a un problema
+     en `watchChannelChanges`, no en la lectura del canal en sí.
+
 ## Por hacer
 
-1. **Selectores de color por efecto** — cada efecto tiene tres bancos (verde/rojo/amarillo)
-   en su propia dirección, ya documentadas: Boost `60 00 06 39`, Mod `60 00 06 3A`,
-   FX `60 00 06 3B`, Delay `60 00 06 3C`, Reverb `60 00 06 3D`. **No son niveles**: valores
-   `00|01|02`, así que no les vale el `Slider` ni el rango `0..100`; necesitan un control de
-   tres estados. Igual que con los niveles, cada uno se confirma con audio antes de darlo por
-   bueno.
-2. **Amp Type (`60 00 06 50`)** — el selector de tipo de amplificador
-   (Acoustic/Clean/Crunch/Lead/Brown, más variaciones y "sneaky amps"). Tampoco es un nivel:
-   necesita UI propia y la tabla de valores de `amplifier.yaml` (sección `Types`).
-   Documentado como `KatanaAddresses.AMP_TYPE` y deliberadamente fuera de `LevelId`.
-3. **Parsear el dump de memoria en parámetros.** Hoy `onReadMemoryDumpClicked` solo lo lee y
-   lo loguea; falta convertir esos bytes en el modelo de dominio (`AmpState` / `Preset`, ver
-   CLAUDE.md §4.2) para poblar la UI sin depender de un GET por parámetro al conectar — que
-   con once niveles ya son once peticiones en serie.
-4. **UI real de control** — más allá de la pantalla de diagnóstico (`DebugConnectionScreen`):
-   pantallas por dominio (`AmpScreen`, `EffectsScreen`, `PresetsScreen`, ver CLAUDE.md §4.2),
-   sin exponer direcciones SysEx a la capa de Compose.
-5. **Decidir explícitamente kshoji/USB-MIDI-Driver** (CLAUDE.md §6) — la recomendación
-   registrada es no usarla, pero la decisión sigue marcada como pendiente de confirmar.
-6. **La duda del handshake sin respuesta** (CLAUDE.md §4.1) — de baja prioridad y no
-   bloqueante; nada de lo implementado la ha necesitado hasta ahora.
+Roadmap de **bloques de trabajo** hacia la visión de alcance completo de CLAUDE.md ("Visión
+de alcance"): una alternativa completa a Boss Tone Studio. Son bloques, no tareas atómicas
+listas para ejecutar — cada uno probablemente se descompone en varias tareas más pequeñas
+cuando le toque investigarse, con la misma disciplina de siempre (nada se da por bueno sin
+confirmarlo con audio o con el amplificador real).
+
+1. ✅ **Hecho y confirmado (2026-09-03) en Booster; extendido a los cinco efectos
+   (2026-09-04).** Se escribe en la dirección de **tipo activo**; ver CLAUDE.md §5.2. Mod, FX,
+   Delay y Reverb usan la misma dirección gemela pero están **pendientes de confirmar** — ver
+   "Pendiente por probar".
+2. ✅ **Booster hecho (2026-09-04), pendiente de confirmar con audio** — ver "Pendiente por
+   probar". Sus 9 parámetros fijos (`60 00 00 10`–`18`) están todos cableados. **Falta Delay y
+   Reverb**, que comparten la misma forma de "DSP simple" (un juego fijo, no un bloque por
+   tipo) y deberían ser un trabajo parecido de encontrar sus propias direcciones. **Mod y FX
+   siguen siendo harina de otro costal** —un bloque de direcciones distinto por cada uno de
+   sus 31 tipos, con una sola fuente de Mk2— pero ya **no hay que leer el XML**: el mapa
+   completo está extraído y documentado (CLAUDE.md §5.2, "El mapa de parámetros internos de
+   Mod y FX"), con los 31 bloques indexados, cuatro tipos detallados parámetro a parámetro y
+   la regla `FX = Mod + 0x0200` verificada. Cablear un tipo es ahora trabajo mecánico, salvo
+   por las seis anomalías que la extracción dejó señaladas — la primera de las cuales,
+   `Pre Delay` en pasos de 0,5 ms, **obliga a extender `LevelScale` antes** de tocar 2x2
+   Chorus, Pitch Shifter o Harmonist.
+3. **Controles sin perilla física en el panel**: Noise Gate, Solo, Contour, posición IN/OUT de
+   EQ1 y EQ2 (antes o después del preamp), selección de cadena de efectos (chain).
+4. **Guardado de presets** — escribir el estado actual editado a un canal específico (p. ej.
+   1A), equivalente a grabar un preset desde el panel pero hecho desde la app. `AmpState` ya
+   cubre la lectura del estado actual; falta el guardado (`7F 00 01 04`, sin investigar).
+5. **Import/export de archivos `.tsl`**, usando los offsets de
+   `reference/TuxKatana/params/presets_addrs.yaml`.
+6. **UI real de control** — pantallas por dominio (`AmpScreen`, `EffectsScreen`,
+   `PresetsScreen`, ver CLAUDE.md §4.2) en vez de la pantalla de diagnóstico actual, sin
+   exponer direcciones SysEx a la capa de Compose. A intercalar una vez que el bloque 2 tenga
+   al menos 2-3 efectos completos, para no rehacer la UI repetidamente.
 
 ## Notas y decisiones técnicas
 
@@ -475,6 +878,69 @@ seguimiento, no repite lo que ya está ahí.
   difiere de `anti_flood.py` de TuxKatana, que además va soltando valores intermedios cada
   100 ms. Si algún día se quiere que el amp siga el arrastre en vivo, habría que cambiar a
   throttle — pero entonces vuelve el riesgo de inundarlo que motivó la nota original.
+- **2026-09-03 — Fijar el criterio de cierre antes de ver el resultado es lo que permitió
+  cerrar.** El handshake llevaba desde el 2026-09-02 como "duda de baja prioridad", que es la
+  etiqueta con la que las investigaciones se quedan abiertas indefinidamente. Se acotó a **una**
+  hipótesis concreta —la trama con los bytes de versión reales del amplificador, el único byte
+  en que difería de su Identity Reply— y se escribió de antemano qué significaría cada
+  resultado. Salió que no, y se cerró sin discusión. Sin ese compromiso previo lo natural
+  habría sido inventar la siguiente hipótesis.
+- **2026-09-03 — `stateIn` en un scope que nadie cancela cuelga los tests y fuga en
+  producción.** Al derivar la cara de display de un nivel se usó
+  `state.map{}.stateIn(scope, Eagerly)`. En los tests, `runBlocking` espera a sus hijos y esa
+  corrutina no termina nunca: la suite se colgó diez minutos. En la app no se colgaba nada,
+  pero el repositorio se reconstruye en cada reconexión y esos colectores se habrían ido
+  acumulando en `viewModelScope`. La versión buena es una propiedad calculada
+  (`displayValue`) más la conversión donde se colecta; **una derivación pura no necesita una
+  corrutina**.
+- **2026-09-03 — Medir la mejora es parte de hacerla.** Cambiar 24 peticiones por una parecía
+  una mejora evidente, y en número de mensajes lo era: 24 → 1. Pero el log mostró que los
+  controles tardaban **3 s** en poblarse frente a los 540 ms de antes, porque la recogida
+  esperaba una ventana fija en vez de cortar cuando el amplificador se calla. Corregido, el
+  ciclo completo quedó en **539 ms → 3013 ms → ~300 ms**: sin mirar los tiempos del log se
+  habría dado por buena una regresión de 2,5 s vendida como mejora de 24×. **Contar mensajes
+  no es medir latencia**, y la métrica que importa es la que ve el usuario —cuándo se pueblan
+  los controles—, no cuántas peticiones se ahorran.
+- **2026-09-03 — ⚠️ Curiosidad sin investigar: los primeros 16 bytes de `60 00 00 00` no
+  parecen el nombre del preset.** El botón de dump los muestra como `"{?"` — bytes
+  `7B 3F` seguidos de catorce espacios (`20`)—, que no es ASCII imprimible plausible para un
+  nombre. Los nombres que sí se leyeron bien están en `10 01 00 00`…`10 08 00 00` y salían
+  como `"KATANA Mk2"`, así que el formato de nombre existe y se sabe reconocer.
+  - **Hipótesis**: que `60 00 00 00` no contenga en el Mk2 lo mismo que en el mapa MK1 del
+    que se heredó (`katana_sysex.txt`, cuya primera línea dice "Boss Katana 100 Combo — v1.7 -
+    2017-03-23"). Sería el mismo patrón que ya mordió con las direcciones de parámetros — con
+    un matiz incómodo: **hasta ahora las direcciones "de sistema" (`10 xx`, `60 00 00 00`,
+    `7F 00 00 01`) se habían dado por fiables** precisamente porque las de parámetros no lo
+    eran. Esta es la primera grieta en esa suposición.
+  - **Nada depende de ello**: el parseo de parámetros no usa esos bytes, y el dump entero
+    funciona. Queda anotado por si algún día se implementa el nombre del preset actual, no
+    como tarea.
+- **2026-09-03 — Un valor que rebota solo delata una dirección de solo reporte.** Es el
+  diagnóstico más barato que ha dado este proyecto: si al mover un control la UI se pone en el
+  valor nuevo y vuelve sola al anterior en un instante, la dirección **reporta pero no acepta
+  escritura**. El rebote es el mensaje espontáneo del amplificador diciendo su estado real, y
+  solo es visible porque el edit mode y la actualización desde el amp están cableados. Antes
+  de buscar otra dirección, mirar si la que hay está etiquetada como estado (`led state` en
+  `midi.xml`).
+- **2026-09-03 — El bloque `60 00 06 5x` no era especial.** Once confirmaciones seguidas ahí
+  habían creado la regla implícita de que solo lo alto se escribe. Las once direcciones bajas
+  confirmadas este día (color ×5, on/off ×5, modelo de amplificador) la derogan. Lo que tiene
+  de particular ese bloque es que es **el de las perillas del panel**, no el de lo escribible.
+- **2026-09-03 — Un selector rechaza; un nivel clampea.** Es la única diferencia real entre
+  los dos tipos de control, y sale de que los valores de un selector **no son contiguos**:
+  `AmpType` va del `0x00` al `0x20` saltándose el `0x19`, así que "el legal más cercano" no
+  significa nada. Importa sobre todo al recibir: si el amplificador reporta un valor fuera de
+  la tabla, lo correcto es dejar la UI quieta y que salga en el log, no mover el control a un
+  vecino inventado. El debounce se cae solo: sin arrastre no hay avalancha que coalescer.
+- **2026-09-03 — El sentido de los on/off: `00` off, `01` on.** Estaba anotado como
+  suposición porque `Adresses.txt:81` escribe `[00|01] # [ON|OFF]`, que leído en orden diría
+  lo contrario. Confirmado con el amplificador el mismo día: es como en todo lo demás, y esa
+  anotación simplemente lista los valores y las etiquetas en órdenes distintos.
+- **2026-09-03 — Kotlin anida los comentarios de bloque.** Escribir `params/*.yaml` dentro de
+  un KDoc abre un comentario anidado que no cierra nunca, y el error que sale
+  ("Unclosed comment" al final del fichero, más decenas de "Unresolved reference" en
+  cascada) no señala la línea culpable. Pasó dos veces en esta sesión. Al citar rutas con
+  comodín en un KDoc, no dejar la secuencia barra-asterisco.
 - **2026-09-03 — La anotación más explícita de `Adresses.txt` resultó ser la equivocada.**
   Con flechas de dirección inequívocas —único sitio del fichero anotado así— afirmaba que
   `60 00 06 51` era de solo lectura y `60 00 00 22` la de escritura. El audio dice lo
@@ -507,11 +973,12 @@ seguimiento, no repite lo que ya está ahí.
   contraejemplo: acepta el mensaje y no hace nada. Además, esas seis no son todas del mismo
   tipo: `60 00 06 50` (Amp Type) es un **selector**, no un nivel continuo, así que ni el
   rango `0..100` se le puede suponer.
-- **2026-09-03 — Los rangos: probados, no demostrados, y aceptados así.** El slider llega a
-  100 poco antes del tope físico en las seis perillas. Puede ser holgura mecánica o puede ser
-  que el 100 real esté en el tope; de oído no se distingue. Se acepta `0..100` como decisión
-  explícita, no como hecho verificado, y queda anotada la prueba que lo zanjaría sin oído:
-  girar la perilla al tope con edit mode activo y leer lo que reporta el amplificador.
+- **2026-09-03 — Los rangos: la duda del tramo sobrante era dos causas, no una.** Se anotó
+  que el slider llegaba a 100 poco antes del tope físico y que de oído no se podía distinguir
+  entre holgura mecánica y un rango mal fijado. Resultó ser **las dos cosas a la vez**: los
+  cinco niveles de efecto tenían un desfase de uno, y encima hay holgura real. Buscar *una*
+  explicación era el error; lo que lo zanjó fue notar que Presence, sin desfase posible,
+  tenía el mismo síntoma.
 - **2026-09-02 — Las anotaciones de las fuentes de Mk2 no predicen nada.** `60 00 05 48`
   estaba limpiamente en `SEND` de `reverb.yaml` y **no** funciona; `60 00 06 57` está repetida
   bajo `Unimplemented:` en `booster.yaml` y **sí** funciona. `SEND`, `RECV` y `Unimplemented`
@@ -633,3 +1100,38 @@ seguimiento, no repite lo que ya está ahí.
   `The specified initialization script '/tmp/ijMapper1.gradle' does not exist`, porque el
   daemon del host no ve el `/tmp` del sandbox. Solución: `./gradlew --stop` y volver a
   sincronizar, o separar los `GRADLE_USER_HOME` de host y Studio.
+- **2026-09-03 — Investigación (sin implementar): el canal/preset activo es un solo byte de
+  8+1 valores en `00 01 00 00`, no banco+canal separados.** Documentado en CLAUDE.md §5.1 con
+  cita de archivo y línea. Resumen de la evidencia: `switcher.py:75-88` indexa un único
+  `ch_num` 1..8 (≤4 banco A, resto banco B); `config.yaml:8-17` lista los ocho valores con su
+  Program Change comentado al lado; `globals.py:14-15` fija `CURRENT_PRESET_LEN = 0x02` (dos
+  bytes de dato, no uno). Se puede **leer** por dos vías: GET explícito
+  (`katana_sysex.txt:180-198`, exige edit mode) o reporte espontáneo
+  (`controller.py:95-98`, cualquier entrante a esa dirección se trata como cambio de canal —
+  ya cableado en la app vía `applyIncoming`, solo falta que algo escuche esa dirección).
+  **Descartado Program Change como mecanismo principal**: la tabla existe y es real
+  (`midi.yaml:23-34`, `midi.xml:945-947` confirma un patch number de Mk2 en esa misma
+  posición del mapa), pero viajar por PC exigiría una segunda ruta de empaquetado USB-MIDI
+  (CIN `0xC`, 2 bytes) que hoy no existe — `packUsbMidi` solo emite SysEx — y PC depende del
+  canal MIDI configurado en `00 02 00 00`, una variable más que SysEx no tiene. Recomendación:
+  SysEx a `00 01 00 00`, igual que todo lo demás ya implementado.
+
+- **2026-09-04 — El `desc` de `midi.xml` es lo que hace extraíble el mapa de Mod/FX, y la
+  simetría FX = Mod + `0x0200` ahorra la mitad del trabajo.** Dos hallazgos de método, no de
+  protocolo, que conviene no volver a descubrir.
+  - Cada `<DATA>` del bloque lleva un **prefijo por tipo** en su atributo `desc` (`MOD PH:`,
+    `MOD FL:`, `MOD 2CE:`…) y los nodos de un tipo son consecutivos. Agrupar por `desc`
+    delimita los 31 bloques solo, sin adivinar dónde acaba uno y empieza el siguiente — que
+    era el problema real de leer 2.300 líneas de XML a ojo.
+  - El bloque FX **repite el de Mod byte a byte** con el tercer byte de dirección +2. No se
+    dio por bueno con cuatro muestras: se compararon los 237 nodos de cada uno por
+    `(LSB relativa, 4.º byte, tipo, nombre del parámetro)` y salen idénticos, con 14
+    diferencias que son **solo de etiqueta**. Dos de esas etiquetas son errores de la fuente:
+    `midi.xml` llama `ACS:` a dos tipos distintos dentro del bloque Mod (Compressor `01 16` y
+    AC Guitar Sim `02 41`) mientras que en FX sí los desambigua (`AGS:`), y las etiquetas de
+    los `Pre Delay` anidados de FX están copiadas mal. Ninguna afecta a una dirección.
+  - **La verificación mecánica es lo que da confianza aquí**, porque para Mod/FX hay **una
+    sola fuente de Mk2** y no se puede contrastar con una segunda, como sí se hizo con los
+    catálogos de tipos de Booster, Delay y Reverb. Comprobar la coherencia interna de la
+    fuente es lo mejor disponible — y sigue sin sustituir a la prueba con audio, que está
+    pendiente para todo este bloque.

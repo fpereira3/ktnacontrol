@@ -57,6 +57,21 @@ enum class AmpType(val value: Int, val displayName: String) {
     R_FIER_MODERN(0x15, "R-Fier Modern"),
     CORE_METAL(0x07, "Core Metal");
 
+    /**
+     * The base / variation pair this type belongs to, or null for the individual models.
+     *
+     * Only the ten types that map onto the five knob positions have a variation: the rest —
+     * the "sneaky amps" — are selected outright and the VARIATION button does not apply to
+     * them. ⚠️ What the amp reports at [KatanaAddresses.AMP_VARIATION] while one of those is
+     * active is **unknown**, never observed.
+     */
+    val category: AmpCategory?
+        get() = AmpCategory.entries.firstOrNull { it.baseValue == value || it.variationValue == value }
+
+    /** Whether this is the "Var [...]" half of a pair. */
+    val isVariation: Boolean
+        get() = AmpCategory.entries.any { it.variationValue == value }
+
     companion object {
         /** The raw byte values, for [KatanaAddresses] and for building a control. */
         val VALUES: List<Int> = entries.map { it.value }
@@ -82,12 +97,29 @@ enum class AmpType(val value: Int, val displayName: String) {
  *
  * ⚠️ Sin confirmar contra el amplificador.
  */
-enum class AmpCategory(val value: Int, val displayName: String) {
-    ACOUSTIC(0x00, "Acoustic"),
-    CLEAN(0x01, "Clean"),
-    CRUNCH(0x02, "Crunch"),
-    LEAD(0x03, "Lead"),
-    BROWN(0x04, "Brown");
+enum class AmpCategory(
+    val value: Int,
+    val displayName: String,
+    /** What [KatanaAddresses.AMP_TYPE_FULL] takes for this category with variation **off**. */
+    val baseValue: Int,
+    /** …and with variation **on**. */
+    val variationValue: Int,
+) {
+    ACOUSTIC(0x00, "Acoustic", baseValue = 0x01, variationValue = 0x1C),
+    CLEAN(0x01, "Clean", baseValue = 0x08, variationValue = 0x1D),
+    CRUNCH(0x02, "Crunch", baseValue = 0x0B, variationValue = 0x1E),
+    LEAD(0x03, "Lead", baseValue = 0x18, variationValue = 0x1F),
+    BROWN(0x04, "Brown", baseValue = 0x17, variationValue = 0x20);
+
+    /**
+     * The value to write to [KatanaAddresses.AMP_TYPE_FULL] to put this category in or out of
+     * variation.
+     *
+     * This is how the app changes the variation at all: writing to
+     * [KatanaAddresses.AMP_VARIATION] does nothing (confirmed 2026-09-03), but the pairs are
+     * reachable through the model list, which does work.
+     */
+    fun typeValue(variation: Boolean): Int = if (variation) variationValue else baseValue
 
     companion object {
         val VALUES: List<Int> = entries.map { it.value }
@@ -105,7 +137,7 @@ enum class AmpCategory(val value: Int, val displayName: String) {
  *    color select`),
  *  - `reference/TuxKatana/doc/Adresses.txt:70, 83, 98, 112, 123` (`-> [00|01|02]`, and line
  *    83 annotates it `# [green|red|yellow]`),
- *  - `reference/TuxKatana/params/*.yaml` (`bo_bank_sel`, `mo_bank_sel`, `fx_bank_sel`,
+ *  - los YAML de `reference/TuxKatana/params/` (`bo_bank_sel`, `mo_bank_sel`, `fx_bank_sel`,
  *    `de_bank_sel`, `re_bank_sel`).
  *
  * `reference/katana-midi-bridge/parameters/color_assign.json:2-6` defines the same

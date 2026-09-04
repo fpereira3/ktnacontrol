@@ -116,8 +116,9 @@ class KatanaUsbTransport private constructor(
      */
     suspend fun sendHandshake(
         modelId: Byte = KatanaHandshake.MODEL_ID_KATANA,
+        version: ByteArray = KatanaHandshake.VERSION_GENERIC,
     ): List<Int> {
-        val message = KatanaHandshake.message(modelId)
+        val message = KatanaHandshake.message(modelId, version)
         val written = ArrayList<Int>(KatanaHandshake.REPEAT_COUNT)
         repeat(KatanaHandshake.REPEAT_COUNT) { index ->
             written += sendRaw(message)

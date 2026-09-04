@@ -83,6 +83,37 @@ class RolandSysExTest {
     }
 
     @Test
+    fun `builds a 2-byte SET, like the active channel recall`() {
+        // reference/TuxKatana/params/config.yaml:8-17 gives data+checksum for CH_1 and CH_8;
+        // Panel (00 00) is not listed there, so its checksum is derived from the same
+        // algorithm rather than copied from a source.
+        val address = Address(0x00, 0x01, 0x00, 0x00)
+        assertEquals(
+            "F0 41 00 00 00 00 33 12 00 01 00 00 00 00 7F F7", // Panel: data 00 00
+            RolandSysEx.set(address, MidiBytes.encode(0, 2)).hex(),
+        )
+        assertEquals(
+            "F0 41 00 00 00 00 33 12 00 01 00 00 00 01 7E F7", // CH_1: data 00 01, checksum 7E
+            RolandSysEx.set(address, MidiBytes.encode(1, 2)).hex(),
+        )
+        assertEquals(
+            "F0 41 00 00 00 00 33 12 00 01 00 00 00 08 77 F7", // CH_8: data 00 08, checksum 77
+            RolandSysEx.set(address, MidiBytes.encode(8, 2)).hex(),
+        )
+    }
+
+    @Test
+    fun `builds the active channel query`() {
+        // katana_sysex.txt:180-198, "Determine Current Preset": QUERY 00 01 00 00, length
+        // 00 00 00 02. The exact reply is not traced byte-for-byte in the source; the
+        // checksum here is the same algorithm already covered by the other GET tests.
+        assertEquals(
+            "F0 41 00 00 00 00 33 11 00 01 00 00 00 00 00 02 7D F7",
+            RolandSysEx.get(Address(0x00, 0x01, 0x00, 0x00), 2).hex(),
+        )
+    }
+
+    @Test
     fun `matches the checksum worked example of the spec`() {
         // katana_sysex.txt, "Checksum Algorithm": reverb type red -> 0x79.
         assertEquals(0x79, RolandSysEx.checksum(bytes("60 00 12 14 01")))

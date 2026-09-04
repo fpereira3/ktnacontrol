@@ -5,10 +5,18 @@ import android.hardware.usb.UsbDevice
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.alonx3.ktnacontrol.device.KatanaLink
+import dev.alonx3.ktnacontrol.device.KatanaEnumParameter
 import dev.alonx3.ktnacontrol.device.KatanaParameter
 import dev.alonx3.ktnacontrol.device.KatanaRepository
 import dev.alonx3.ktnacontrol.protocol.Address
+import dev.alonx3.ktnacontrol.protocol.AmpCategory
+import dev.alonx3.ktnacontrol.protocol.AmpType
+import dev.alonx3.ktnacontrol.protocol.BoostType
+import dev.alonx3.ktnacontrol.protocol.DelayType
+import dev.alonx3.ktnacontrol.protocol.EffectColor
 import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
+import dev.alonx3.ktnacontrol.protocol.ModFxType
+import dev.alonx3.ktnacontrol.protocol.ReverbType
 import dev.alonx3.ktnacontrol.protocol.RolandMessage
 import dev.alonx3.ktnacontrol.protocol.RolandSysEx
 import dev.alonx3.ktnacontrol.protocol.awaitRolandReply
@@ -25,13 +33,19 @@ import dev.alonx3.ktnacontrol.usb.packUsbMidi
 import dev.alonx3.ktnacontrol.usb.toHexString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -79,6 +93,59 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     private val _levels = MutableStateFlow(LevelId.entries.associateWith { null as Int? })
     val levels: StateFlow<Map<LevelId, Int?>> = _levels.asStateFlow()
 
+    /**
+     * Cached value of the amp-type selectors, keyed by [SelectorId].
+     *
+     * Keyed by the UI's own enum, never by [Address]: the screen must not learn addresses
+     * (CLAUDE.md §4.2). Three maps rather than one because the three families are addressed
+     * by three different things and merging them would need a wrapper key for no gain.
+     */
+    private val _selectors = MutableStateFlow(SelectorId.entries.associateWith { null as Int? })
+    val selectors: StateFlow<Map<SelectorId, Int?>> = _selectors.asStateFlow()
+
+    private val _effectColors =
+        MutableStateFlow(EffectId.entries.associateWith { null as Int? })
+
+    /** Green / red / yellow bank of each effect, or null until read. */
+    val effectColors: StateFlow<Map<EffectId, Int?>> = _effectColors.asStateFlow()
+
+    private val _effectEnabled =
+        MutableStateFlow(EffectId.entries.associateWith { null as Boolean? })
+
+    /**
+     * Whether each effect is on, or null until read.
+     *
+     * ⚠️ `01` is taken to mean "on" — see the warning in
+     * [KatanaAddresses.BOOST_ENABLED]: a source can be read as saying the opposite.
+     */
+    val effectEnabled: StateFlow<Map<EffectId, Boolean?>> = _effectEnabled.asStateFlow()
+
+    private val _effectTypes = MutableStateFlow(EffectId.entries.associateWith { null as Int? })
+
+    /**
+     * Tipo de efecto activo de cada uno de los cinco efectos, o null mientras no se sepa.
+     *
+     * Solo Booster está confirmado con audio (2026-09-03); Mod, FX, Delay y Reverb están
+     * implementados pero pendientes de esa misma prueba — ver BACKLOG.md, "Pendiente por
+     * probar".
+     */
+    val effectTypes: StateFlow<Map<EffectId, Int?>> = _effectTypes.asStateFlow()
+
+    private val _boosterParams =
+        MutableStateFlow(BoosterParamId.entries.associateWith { null as Int? })
+
+    /**
+     * Booster's five internal continuous parameters, in **display** units (CLAUDE.md §5.2).
+     *
+     * ⚠️ Implemented but unconfirmed against the amplifier (2026-09-04).
+     */
+    val boosterParams: StateFlow<Map<BoosterParamId, Int?>> = _boosterParams.asStateFlow()
+
+    private val _boosterSoloEnabled = MutableStateFlow<Boolean?>(null)
+
+    /** ⚠️ Booster's Solo switch (`60 00 00 15`). Unconfirmed, same status as [boosterParams]. */
+    val boosterSoloEnabled: StateFlow<Boolean?> = _boosterSoloEnabled.asStateFlow()
+
     private val _editMode = MutableStateFlow(false)
 
     /**
@@ -90,6 +157,17 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     val editMode: StateFlow<Boolean> = _editMode.asStateFlow()
 
     private var repositoryMirror: Job? = null
+
+    /** Vigila el canal activo para releer el estado cuando cambia. */
+    private var channelWatch: Job? = null
+
+    /**
+     * Canal para el que vale el estado que hay cargado ahora mismo.
+     *
+     * Es lo que evita releer cuando el canal "cambia" al mismo valor que ya teníamos —el
+     * caso típico es el GET de respaldo del propio dump, que lo vuelve a leer.
+     */
+    private var loadedChannel: Int? = null
 
     /** Adapts the USB transport to the narrow port the repository depends on. */
     private inner class TransportLink(
@@ -161,19 +239,36 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
      * Sends the mandatory handshake twice. Any reply shows up in the log on its own, through
      * the read loop.
      */
-    fun onHandshakeClicked() {
+    fun onHandshakeClicked() = sendHandshake(KatanaHandshake.VERSION_GENERIC, "versión genérica")
+
+    /**
+     * The one experiment left on the silent handshake (CLAUDE.md §4.1).
+     *
+     * Sends the same frame with the firmware-version bytes **the amplifier itself reported**
+     * in its Identity Reply (`06 00 00 00`) instead of the reference library's zeros. That
+     * single byte is the only difference between what the app emits and what the amp emits,
+     * and it is the last hypothesis standing.
+     *
+     * ⚠️ It is also the **last** one that will be tried: nothing implemented needs the
+     * handshake, so if this gets no answer the question is closed rather than kept open.
+     */
+    fun onHandshakeRealVersionClicked() =
+        sendHandshake(KatanaHandshake.VERSION_REPORTED, "versión real del amp")
+
+    private fun sendHandshake(version: ByteArray, label: String) {
         val activeTransport = transport ?: return appendLog(NO_TRANSPORT)
         viewModelScope.launch {
-            val message = KatanaHandshake.message(HANDSHAKE_MODEL_ID)
-            appendLog("→ Handshake (model 0x%02X), x2 con ~4 ms:".format(HANDSHAKE_MODEL_ID))
+            val message = KatanaHandshake.message(HANDSHAKE_MODEL_ID, version)
+            appendLog("→ Handshake ($label, model 0x%02X), x2 con ~4 ms:".format(HANDSHAKE_MODEL_ID))
             appendLog("  sysex: ${message.toHexString()}")
 
             val written = withContext(Dispatchers.IO) {
-                activeTransport.sendHandshake(HANDSHAKE_MODEL_ID)
+                activeTransport.sendHandshake(HANDSHAKE_MODEL_ID, version)
             }
             written.forEachIndexed { index, bytes ->
                 appendLog("  #${index + 1}: ${describeWrite(bytes)}")
             }
+            appendLog("  · Si el amp contesta, la respuesta aparecerá sola en el log.")
         }
     }
 
@@ -515,25 +610,157 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         repositoryMirror = viewModelScope.launch {
             LevelId.entries.forEach { id ->
                 launch {
-                    parameterIn(newRepository, id).state.collect { value ->
-                        _levels.update { levels -> levels + (id to value) }
+                    val parameter = parameterIn(newRepository, id)
+                    parameter.state.collect { raw ->
+                        val shown = raw?.let(parameter.scale::toDisplay)
+                        _levels.update { levels -> levels + (id to shown) }
+                    }
+                }
+            }
+            SelectorId.entries.forEach { id ->
+                launch {
+                    selectorIn(newRepository, id).state.collect { value ->
+                        _selectors.update { current -> current + (id to value) }
+                    }
+                }
+            }
+            EffectId.entries.forEach { effect ->
+                val typeControl = typeControlIn(newRepository, effect)
+                launch {
+                    typeControl.state.collect { value ->
+                        _effectTypes.update { current -> current + (effect to value) }
+                    }
+                }
+            }
+            BoosterParamId.entries.forEach { id ->
+                launch {
+                    val parameter = boosterParamIn(newRepository, id)
+                    parameter.state.collect { raw ->
+                        val shown = raw?.let(parameter.scale::toDisplay)
+                        _boosterParams.update { current -> current + (id to shown) }
+                    }
+                }
+            }
+            launch {
+                newRepository.boostSoloEnabled.state.collect { value ->
+                    _boosterSoloEnabled.value = value?.let { it == KatanaAddresses.SWITCH_ON }
+                }
+            }
+            EffectId.entries.forEach { effect ->
+                launch {
+                    colorIn(newRepository, effect).state.collect { value ->
+                        _effectColors.update { current -> current + (effect to value) }
+                    }
+                }
+                launch {
+                    enabledIn(newRepository, effect).state.collect { value ->
+                        _effectEnabled.update { current ->
+                            current + (effect to value?.let { it == KatanaAddresses.SWITCH_ON })
+                        }
                     }
                 }
             }
         }
-        // Una lectura detrás de otra, no en paralelo: las respuestas se correlan por dirección
-        // sobre un stream compartido, y lanzarlas a la vez es la misma carrera que ya hubo con
-        // los nombres de preset.
+        // **Una** petición en vez de 24 GET en serie: el amplificador contesta el dump con
+        // varios mensajes de golpe y todas las direcciones que la app controla viven dentro
+        // de `60 00 00 00`. Lo que el dump no cubra se recupera con su GET individual.
         viewModelScope.launch {
-            LevelId.entries.forEach { id ->
-                val value = parameterIn(newRepository, id).read()
-                appendLog(
-                    if (value != null) "  ${id.logName} inicial: $value"
-                    else "  ! No se pudo leer ${id.logName} inicial."
-                )
+            appendLog("→ Poblando el estado desde el dump de memoria...")
+            reload(newRepository, "la conexión")
+        }
+        watchChannelChanges(newRepository)
+    }
+
+    /**
+     * Relee **todo** el estado cada vez que cambia el canal activo.
+     *
+     * Cada canal (1A–4A, 1B–4B, PANEL) tiene sus propios valores: niveles, modelo de
+     * amplificador, colores, on/off y tipos de efecto son todos distintos. Sin esto la app
+     * seguiría mostrando los del canal anterior, que es peor que no mostrar nada — parecería
+     * que el amplificador dice una cosa cuando dice otra.
+     *
+     * Detalles que hacen que esto no se muerda la cola:
+     *  - **Da igual quién cambió el canal.** Se observa el estado del control, así que entra
+     *    tanto el cambio hecho desde la app como el del footswitch físico.
+     *  - **No hay bucle**: el canal vive en `00 01 00 00`, fuera del dump, así que recargar no
+     *    lo reescribe. El GET de respaldo lo relee, pero un `StateFlow` no reemite un valor
+     *    igual, así que ahí se para.
+     *  - **`collectLatest` + un margen** cancelan la recarga en vuelo si el canal vuelve a
+     *    cambiar: pasar 1A→2A→3A rápido hace **una** recarga, la del canal donde te quedaste.
+     *    El margen además le da tiempo al amplificador a cambiar de canal de verdad antes de
+     *    preguntarle en qué estado quedó.
+     */
+    private fun watchChannelChanges(repository: KatanaRepository) {
+        channelWatch?.cancel()
+        channelWatch = viewModelScope.launch {
+            repository.channel.state.filterNotNull().collectLatest { channel ->
+                if (channel == loadedChannel) return@collectLatest
+                delay(CHANNEL_RELOAD_SETTLE_MS)
+                appendLog("↻ Canal ${describeChannel(channel)}: releyendo todo el estado...")
+                reload(repository, "el cambio de canal")
             }
         }
     }
+
+    /** Lee el dump y deja anotado para qué canal vale lo que se acaba de cargar. */
+    private suspend fun reload(repository: KatanaRepository, reason: String) {
+        val load = repository.loadFromDump()
+        loadedChannel = repository.channel.state.value
+        logDumpLoad(load)
+        if (load.messages == 0) {
+            appendLog("  ! Tras $reason el dump no contestó; el estado puede estar viejo.")
+        }
+    }
+
+    private fun describeChannel(value: Int): String = when (value) {
+        0 -> "Panel"
+        in 1..4 -> "A$value"
+        in 5..8 -> "B${value - 4}"
+        else -> "desconocido ($value)"
+    }
+
+    private fun logDumpLoad(load: KatanaRepository.DumpLoad) {
+        if (load.messages == 0) {
+            appendLog("  ! El dump no contestó; los controles quedan en desconocido.")
+            return
+        }
+        appendLog(
+            "← dump: ${load.messages} mensaje(s), ${load.dataBytes} B de datos" +
+                if (load.invalidMessages > 0) ", ${load.invalidMessages} inválido(s)" else ""
+        )
+        appendLog(
+            "  ${load.fromDump} control(es) poblados del dump" +
+                ", ${load.fromFallbackGet} con GET de respaldo" +
+                if (load.stillUnknown > 0) ", ${load.stillUnknown} sin conocer" else ""
+        )
+        appendLog("  ${load.state.summary()}")
+    }
+
+    private fun selectorIn(repository: KatanaRepository, id: SelectorId): KatanaEnumParameter =
+        when (id) {
+            SelectorId.AMP_CATEGORY -> repository.ampCategory
+            SelectorId.AMP_TYPE -> repository.ampType
+            SelectorId.AMP_VARIATION -> repository.ampVariation
+            SelectorId.ACTIVE_CHANNEL -> repository.channel
+        }
+
+    private fun colorIn(repository: KatanaRepository, effect: EffectId): KatanaEnumParameter =
+        when (effect) {
+            EffectId.BOOST -> repository.boostColor
+            EffectId.MOD -> repository.modColor
+            EffectId.FX -> repository.fxColor
+            EffectId.DELAY -> repository.delayColor
+            EffectId.REVERB -> repository.reverbColor
+        }
+
+    private fun enabledIn(repository: KatanaRepository, effect: EffectId): KatanaEnumParameter =
+        when (effect) {
+            EffectId.BOOST -> repository.boostEnabled
+            EffectId.MOD -> repository.modEnabled
+            EffectId.FX -> repository.fxEnabled
+            EffectId.DELAY -> repository.delayEnabled
+            EffectId.REVERB -> repository.reverbEnabled
+        }
 
     private fun parameterIn(repository: KatanaRepository, id: LevelId): KatanaParameter =
         when (id) {
@@ -561,28 +788,200 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         val parameter = parameterIn(active, id)
         viewModelScope.launch {
             appendLog("→ GET ${id.logName} (${parameter.address}):")
-            val value = parameter.read()
+            val raw = parameter.read()
             appendLog(
-                if (value != null) "  ← el amp responde: $value"
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
                 else "  · sin respuesta al GET de ${id.logName}."
             )
         }
     }
 
-    /** Moves one level. Optimistic and debounced, so the slider never lags the finger. */
+    /**
+     * Moves one level, in what the UI shows. Optimistic and debounced, so the slider never
+     * lags the finger.
+     *
+     * The byte that travels is not necessarily this number: the five effect levels are offset
+     * by one because their `0` means Off. See `LevelScale`.
+     */
     fun onLevelChanged(id: LevelId, value: Int) {
         val active = repository ?: return
-        parameterIn(active, id).set(value)
+        parameterIn(active, id).setLevel(value)
     }
+
+    /** Picks an amp category or model. ✅ Ambas direcciones confirmadas. */
+    fun onSelectorChanged(id: SelectorId, value: Int) {
+        val active = repository ?: return
+        selectorIn(active, id).set(value)
+    }
+
+    /**
+     * Turns the amp's VARIATION on or off — **by writing the model, not the variation flag**.
+     *
+     * `60 00 06 5C` only reports (confirmed 2026-09-03): a SET there is ignored and the amp
+     * keeps reporting its real state, so the switch used to flip back on its own. The five
+     * base channels each have a `Var [...]` twin in the model list at `60 00 00 21`, which
+     * does accept writes, so switching the variation means picking the twin.
+     *
+     * Needs to know which channel it is on, and takes that from the **category**
+     * (`60 00 06 50`) because that one is confirmed to report the physical knob. Does nothing
+     * when the category is unknown or when the current model is one of the individual amps —
+     * see [ampVariationApplies].
+     */
+    fun onAmpVariationChanged(enabled: Boolean) {
+        val active = repository ?: return
+        val category = AmpCategory.fromValue(_selectors.value[SelectorId.AMP_CATEGORY] ?: return)
+        if (category == null) {
+            appendLog("  ! Variación: no se sabe en qué canal está el amp, no se envía nada.")
+            return
+        }
+        if (!ampVariationApplies.value) {
+            appendLog("  ! Variación: el modelo actual no es uno de los cinco canales base.")
+            return
+        }
+        val target = category.typeValue(enabled)
+        appendLog(
+            "→ Variación ${if (enabled) "ON" else "OFF"} vía modelo: " +
+                "${AmpType.fromValue(target)?.displayName ?: target}"
+        )
+        selectorIn(active, SelectorId.AMP_TYPE).set(target)
+    }
+
+    /**
+     * Whether the VARIATION switch means anything right now.
+     *
+     * Only the ten types that pair up with the five knob positions have a variation. With one
+     * of the individual models active, toggling would have to guess a channel to jump to, and
+     * that would silently change the amp — so the switch is disabled instead.
+     *
+     * True while the model is unknown, so the control is not dead on arrival before the first
+     * read comes back.
+     */
+    val ampVariationApplies: StateFlow<Boolean> = _selectors
+        .map { current ->
+            val type = current[SelectorId.AMP_TYPE]?.let { AmpType.fromValue(it) }
+            type == null || type.category != null
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** Picks the green / red / yellow bank of one effect. ✅ Confirmado. */
+    fun onEffectColorChanged(effect: EffectId, value: Int) {
+        val active = repository ?: return
+        colorIn(active, effect).set(value)
+    }
+
+    // --- Tipo de efecto (CLAUDE.md §5.2) --------------------------------------------------
+
+    /**
+     * El control de "tipo activo" de un efecto.
+     *
+     * Los cinco efectos ya tienen catálogo y dirección; solo Booster está confirmado con
+     * audio (2026-09-03). Mod, FX, Delay y Reverb usan la misma dirección "gemela" y se
+     * espera que se comporten igual, pero eso lo dice el amplificador, no la analogía — ver
+     * BACKLOG.md, "Pendiente por probar".
+     */
+    private fun typeControlIn(
+        repository: KatanaRepository,
+        effect: EffectId,
+    ): KatanaEnumParameter = when (effect) {
+        EffectId.BOOST -> repository.boostTypeActive
+        EffectId.MOD -> repository.modTypeActive
+        EffectId.FX -> repository.fxTypeActive
+        EffectId.DELAY -> repository.delayTypeActive
+        EffectId.REVERB -> repository.reverbTypeActive
+    }
+
+    /**
+     * Cambia el tipo de efecto escribiendo en su dirección de **tipo activo**.
+     *
+     * ✅ Confirmado en Booster (2026-09-03): el SET cambia el sonido y se corresponde con el
+     * color encendido en el panel, en las dos direcciones. Mod y FX usan la dirección gemela,
+     * así que se espera lo mismo — pero no está probado.
+     */
+    fun onEffectTypeChanged(effect: EffectId, value: Int) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val control = typeControlIn(active, effect)
+        appendLog("→ SET tipo de ${effect.logName} = ${describeEffectType(effect, value)} (${control.address})")
+        control.set(value)
+    }
+
+    private fun describeEffectType(effect: EffectId, value: Int?): String {
+        if (value == null) return "desconocido"
+        val name = when (effect) {
+            EffectId.BOOST -> BoostType.fromValue(value)?.displayName
+            EffectId.MOD, EffectId.FX -> ModFxType.fromValue(value)?.displayName
+            EffectId.DELAY -> DelayType.fromValue(value)?.displayName
+            EffectId.REVERB -> ReverbType.fromValue(value)?.displayName
+        }
+        return "%s (0x%02X)".format(name ?: "?", value)
+    }
+
+    // --- Parámetros internos de Booster (CLAUDE.md §5.2) -----------------------------------
+    //
+    // ⚠️ Implementados, pendientes de confirmar con audio (2026-09-04). Custom Type y sus
+    // cinco parámetros quedan fuera a propósito, ver KatanaAddresses.
+
+    private fun boosterParamIn(repository: KatanaRepository, id: BoosterParamId): KatanaParameter =
+        when (id) {
+            BoosterParamId.DRIVE -> repository.boostDrive
+            BoosterParamId.BOTTOM -> repository.boostBottom
+            BoosterParamId.TONE -> repository.boostTone
+            BoosterParamId.SOLO_LEVEL -> repository.boostSoloLevel
+            BoosterParamId.EFFECT_LEVEL -> repository.boostEffectLevel
+            BoosterParamId.DIRECT_MIX -> repository.boostDirectMix
+        }
+
+    /** Moves one of Booster's internal parameters, in what the UI shows. Optimistic, debounced. */
+    fun onBoosterParamChanged(id: BoosterParamId, value: Int) {
+        val active = repository ?: return
+        boosterParamIn(active, id).setLevel(value)
+    }
+
+    /** GET half of the audio test for one Booster parameter (CLAUDE.md §5). */
+    fun onReadBoosterParamClicked(id: BoosterParamId) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = boosterParamIn(active, id)
+        viewModelScope.launch {
+            appendLog("→ GET booster ${id.logName} (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de booster ${id.logName}."
+            )
+        }
+    }
+
+    /** Turns Booster's Solo mode on or off (`60 00 00 15`). ⚠️ Sin confirmar. */
+    fun onBoosterSoloEnabledChanged(enabled: Boolean) {
+        val active = repository ?: return
+        val value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF
+        active.boostSoloEnabled.set(value)
+    }
+
+    /** Turns one effect on or off. ✅ Confirmado, incluido `00` = off / `01` = on. */
+    fun onEffectEnabledChanged(effect: EffectId, enabled: Boolean) {
+        val active = repository ?: return
+        val value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF
+        enabledIn(active, effect).set(value)
+    }
+
 
     private fun closeTransport() {
         readJob?.cancel()
         readJob = null
         repositoryMirror?.cancel()
         repositoryMirror = null
+        channelWatch?.cancel()
+        channelWatch = null
+        loadedChannel = null
         repository?.close()
         repository = null
         _levels.value = LevelId.entries.associateWith { null }
+        _selectors.value = SelectorId.entries.associateWith { null }
+        _effectColors.value = EffectId.entries.associateWith { null }
+        _effectEnabled.value = EffectId.entries.associateWith { null }
+        _effectTypes.value = EffectId.entries.associateWith { null }
+        _boosterParams.value = BoosterParamId.entries.associateWith { null }
+        _boosterSoloEnabled.value = null
         _editMode.value = false
         transport?.close()
         transport = null
@@ -617,6 +1016,23 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
          * messages spread over multiple `bulkTransfer` reads.
          */
         const val DUMP_WINDOW_MS = 3_000L
+
+        /**
+         * Margen tras un SET de tipo de Booster antes de fotografiar las cuatro direcciones.
+         *
+         * Un SET no se confirma, así que lo que se espera aquí no es una respuesta sino los
+         * **reportes espontáneos** que el amp manda al cambiar de estado — incluido el rebote
+         * que delataría una dirección de solo lectura.
+         */
+        const val BOOST_TYPE_SETTLE_MS = 400L
+
+        /**
+         * Margen entre detectar el cambio de canal y releer el estado.
+         *
+         * Cumple dos funciones a la vez: darle al amplificador tiempo a cambiar de canal de
+         * verdad antes de preguntarle, y coalescer los cambios rápidos en una sola recarga.
+         */
+        const val CHANNEL_RELOAD_SETTLE_MS = 300L
 
         const val NO_TRANSPORT = "No hay transporte abierto; busca el dispositivo primero."
         const val MAX_LOG_LINES = 500

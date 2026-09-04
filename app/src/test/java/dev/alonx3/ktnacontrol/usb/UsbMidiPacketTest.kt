@@ -1,5 +1,6 @@
 package dev.alonx3.ktnacontrol.usb
 
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -93,4 +94,51 @@ class UsbMidiPacketTest {
     fun `unpacking a buffer shorter than one packet yields nothing`() {
         assertEquals(0, unpackUsbMidi(bytes("04 F0 7E")).size)
     }
+
+    // --- Handshake ---------------------------------------------------------------------
+
+    @Test
+    fun `the generic handshake is the frame the reference library sends`() {
+        assertEquals(
+            "F0 7E 00 06 02 41 33 03 00 00 00 00 00 00 F7",
+            KatanaHandshake.message().hex(),
+        )
+    }
+
+    @Test
+    fun `the real-version handshake differs from the generic one in a single byte`() {
+        val generic = KatanaHandshake.message()
+        val real = KatanaHandshake.message(version = KatanaHandshake.VERSION_REPORTED)
+
+        assertEquals(
+            "F0 7E 00 06 02 41 33 03 00 00 06 00 00 00 F7",
+            real.hex(),
+        )
+        assertEquals("misma longitud", generic.size, real.size)
+        assertEquals(
+            "un solo byte de diferencia",
+            1,
+            generic.indices.count { generic[it] != real[it] },
+        )
+    }
+
+    @Test
+    fun `the real-version handshake is byte for byte the reply the amp sent`() {
+        // Identity Reply real del amplificador, 2026-09-02. La hipótesis del handshake mudo
+        // es justamente que la trama debe ser idéntica a esta.
+        val reply = byteArrayOf(
+            0xF0.toByte(), 0x7E, 0x00, 0x06, 0x02, 0x41, 0x33, 0x03,
+            0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0xF7.toByte(),
+        )
+        assertArrayEquals(reply, KatanaHandshake.message(version = KatanaHandshake.VERSION_REPORTED))
+    }
+
+    @Test
+    fun `a version field of the wrong length is rejected`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            KatanaHandshake.message(version = byteArrayOf(0x06, 0x00))
+        }
+    }
+
+    private fun ByteArray.hex() = joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
 }

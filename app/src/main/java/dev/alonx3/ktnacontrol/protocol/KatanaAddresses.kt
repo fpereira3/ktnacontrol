@@ -70,6 +70,28 @@ object KatanaAddresses {
     const val PRESET_NAME_IN_DUMP = 16
 
     /**
+     * Escala de las **seis perillas de amp/EQ** (`60 00 06 51`–`06 56`): crudo y mostrado son
+     * el mismo número, `0..100`.
+     *
+     * Fuente: `reference/FxFloorboard/midi.xml:44069-44086`, donde cada una lleva
+     * `range 00/64/00/100` — `0x00`..`0x64` crudo mostrado como 0..100. Confirmado por oído
+     * en las seis (2026-09-03), y el rango coincide con el mapa MK1 de
+     * `reference/katana-midi-bridge/parameters/amplifier.json:57-72`.
+     */
+    val PANEL_LEVEL_SCALE: LevelScale = LevelScale.direct(0..100)
+
+    /**
+     * Escala de los **cinco niveles de efecto** (`60 00 06 57`–`06 5B`): `0` es Off y el
+     * `0..100` que se muestra vive en el crudo `1..101`.
+     *
+     * ✅ **Corregido el 2026-09-03**, después de haber usado `0..100` directo durante toda la
+     * fase de niveles. Ver [LevelScale] para las dos fuentes —`midi.xml` y la UI de Boss Tone
+     * Studio— y para lo que explica: el slider llegaba a 100 con la perilla física un pelo
+     * antes del tope porque el crudo 100 que mandaba la app es el 99 del amplificador.
+     */
+    val EFFECT_LEVEL_SCALE: LevelScale = LevelScale.offThenOneBased(0..100)
+
+    /**
      * **Nivel de reverb del Katana Mk2: `60 00 06 5B`, rango 0..100.** Dirección definitiva,
      * de **lectura y escritura a la vez** — no es "la de reporte" de un par.
      *
@@ -84,21 +106,6 @@ object KatanaAddresses {
      * escribe ahí.
      */
     val REVERB_LEVEL = Address(0x60, 0x00, 0x06, 0x5B)
-
-    /**
-     * Rango válido de [REVERB_LEVEL].
-     *
-     * `katana_sysex.txt` dice `0..100` y `reverb.yaml` comenta `'00' -> '63'` (0..99). Se usa
-     * `0..100`, que es lo que se probó por los extremos sin problemas.
-     *
-     * **Probado en el amplificador (2026-09-03) y aceptado.** El slider llega a 100 cuando la
-     * perilla física está a punto del tope, quedando un tramo mínimo de recorrido. No se sabe
-     * si el 100 real está en el tope físico o si ese resto es holgura mecánica, y la
-     * diferencia entre 98 y 100 es inaudible, así que **se da el rango por bueno**. Si alguna
-     * vez hace falta zanjarlo, no hace falta el oído: con Edit Mode activo, girar la perilla
-     * hasta el tope y leer el valor que reporta el amplificador lo dice sin ambigüedad.
-     */
-    val REVERB_LEVEL_RANGE = 0..100
 
     /**
      * ❌ **Intento descartado 1: `60 00 06 18`, del mapa del MK1.**
@@ -163,17 +170,9 @@ object KatanaAddresses {
      * documenta. Sale de `reference/katana-midi-bridge/parameters/amplifier.json:57-72`, que
      * es el mapa del **MK1**, y del formato `normal` de
      * `reference/TuxKatana/params/slider_formats.yaml:1-3`. Coincide con el que ya se acepta
-     * para los seis niveles de efecto (ver [REVERB_LEVEL_RANGE]).
+     * para los seis niveles de efecto (ver [PANEL_LEVEL_SCALE]).
      */
     val GAIN_LEVEL = Address(0x60, 0x00, 0x06, 0x51)
-
-    /**
-     * Rango de [GAIN_LEVEL]: `0..100`. **Probado en el amplificador (2026-09-03) y aceptado**,
-     * con la misma observación que el resto de perillas: el slider llega a 100 poco antes del
-     * tope físico, sin que se pueda zanjar de oído si eso es holgura mecánica o no. Ver
-     * [REVERB_LEVEL_RANGE].
-     */
-    val GAIN_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de Gain, `60 00 00 22`, **que nunca hizo falta probar**:
@@ -201,12 +200,9 @@ object KatanaAddresses {
      * documenta. Sale de `reference/katana-midi-bridge/parameters/amplifier.json:57-72`, que
      * es el mapa del **MK1**, y del formato `normal` de
      * `reference/TuxKatana/params/slider_formats.yaml:1-3`. Coincide con el que ya se acepta
-     * para los seis niveles de efecto (ver [REVERB_LEVEL_RANGE]).
+     * para los seis niveles de efecto (ver [PANEL_LEVEL_SCALE]).
      */
     val VOLUME_LEVEL = Address(0x60, 0x00, 0x06, 0x52)
-
-    /** Rango de [VOLUME_LEVEL]: `0..100`. Probado y aceptado, ver [GAIN_LEVEL_RANGE]. */
-    val VOLUME_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de Volume, `60 00 00 28`, **que nunca hizo falta probar**. En
@@ -225,12 +221,9 @@ object KatanaAddresses {
      * documenta. Sale de `reference/katana-midi-bridge/parameters/amplifier.json:57-72`, que
      * es el mapa del **MK1**, y del formato `normal` de
      * `reference/TuxKatana/params/slider_formats.yaml:1-3`. Coincide con el que ya se acepta
-     * para los seis niveles de efecto (ver [REVERB_LEVEL_RANGE]).
+     * para los seis niveles de efecto (ver [PANEL_LEVEL_SCALE]).
      */
     val BASS_LEVEL = Address(0x60, 0x00, 0x06, 0x53)
-
-    /** Rango de [BASS_LEVEL]: `0..100`. Probado y aceptado, ver [GAIN_LEVEL_RANGE]. */
-    val BASS_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de Bass, `60 00 00 24` (`amplifier.yaml:7`), **que nunca hizo
@@ -249,12 +242,9 @@ object KatanaAddresses {
      * documenta. Sale de `reference/katana-midi-bridge/parameters/amplifier.json:57-72`, que
      * es el mapa del **MK1**, y del formato `normal` de
      * `reference/TuxKatana/params/slider_formats.yaml:1-3`. Coincide con el que ya se acepta
-     * para los seis niveles de efecto (ver [REVERB_LEVEL_RANGE]).
+     * para los seis niveles de efecto (ver [PANEL_LEVEL_SCALE]).
      */
     val MIDDLE_LEVEL = Address(0x60, 0x00, 0x06, 0x54)
-
-    /** Rango de [MIDDLE_LEVEL]: `0..100`. Probado y aceptado, ver [GAIN_LEVEL_RANGE]. */
-    val MIDDLE_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de Middle, `60 00 00 25` (`amplifier.yaml:8`), **que nunca hizo
@@ -273,12 +263,9 @@ object KatanaAddresses {
      * documenta. Sale de `reference/katana-midi-bridge/parameters/amplifier.json:57-72`, que
      * es el mapa del **MK1**, y del formato `normal` de
      * `reference/TuxKatana/params/slider_formats.yaml:1-3`. Coincide con el que ya se acepta
-     * para los seis niveles de efecto (ver [REVERB_LEVEL_RANGE]).
+     * para los seis niveles de efecto (ver [PANEL_LEVEL_SCALE]).
      */
     val TREBLE_LEVEL = Address(0x60, 0x00, 0x06, 0x55)
-
-    /** Rango de [TREBLE_LEVEL]: `0..100`. Probado y aceptado, ver [GAIN_LEVEL_RANGE]. */
-    val TREBLE_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de Treble, `60 00 00 26` (`amplifier.yaml:9`), **que nunca hizo
@@ -288,13 +275,13 @@ object KatanaAddresses {
 
     // --- Selectores: amp type, colores y on/off ------------------------------------------
     //
-    // ⚠️ TODO ESTE BLOQUE ESTÁ SIN CONFIRMAR contra el amplificador (2026-09-03). Las
-    // direcciones salen de la documentación de `reference/` y están implementadas para poder
-    // probarlas, no porque se sepa que funcionan. Vale lo de siempre (CLAUDE.md §5): un SET
-    // bien formado con checksum correcto no demuestra nada.
+    // ✅ Probado contra el amplificador el 2026-09-03. Todo el bloque funciona **salvo
+    // [AMP_VARIATION]**, que resultó ser de solo lectura; ver su KDoc.
 
     /**
-     * ⚠️ **Amp Type — perilla del panel, `60 00 06 50`. SIN CONFIRMAR.**
+     * **Amp Type — perilla del panel, `60 00 06 50`.** Lectura y escritura.
+     *
+     * ✅ Confirmado con el amplificador (2026-09-03): elegir una categoría cambia el canal.
      *
      * Cinco valores, `00`..`04`, uno por posición de la perilla AMP TYPE:
      * Acoustic / Clean / Crunch / Lead / Brown. Ver [AmpCategory].
@@ -315,35 +302,56 @@ object KatanaAddresses {
     val AMP_TYPE_PANEL = Address(0x60, 0x00, 0x06, 0x50)
 
     /**
-     * ⚠️ **Amp Type — modelo completo, `60 00 00 21`. SIN CONFIRMAR.**
+     * **Amp Type — modelo completo, `60 00 00 21`.** Lectura y escritura.
      *
-     * Los 30 modelos de [AmpType], del `0x00` al `0x20` con huecos. `midi.xml:3416` la nombra
-     * `PREAMP: Type`, y `midi.xml:37311-37341` trae la tabla de valores que le corresponde.
+     * ✅ Confirmado con el amplificador (2026-09-03): los 30 modelos cambian el canal, tanto
+     * los cinco base como sus variaciones y los "sneaky amps". `midi.xml:3416` la nombra
+     * `PREAMP: Type`, y `midi.xml:37311-37341` trae la tabla que le corresponde.
      *
-     * ⚠️ **Es una dirección "baja"**, y ahí está la duda: las once direcciones confirmadas
-     * hasta ahora son todas del bloque alto `60 00 06 5x`, y una fuente ya afirmó
-     * equivocadamente que una baja era la de escritura (ver [GAIN_LEVEL]). Puede que esta
-     * acepte escritura, puede que no, y puede que solo funcione [AMP_TYPE_PANEL] con sus
-     * cinco categorías. Se cablean **las dos** precisamente para poder distinguirlo con una
-     * sola sesión de pruebas.
+     * **Es la primera dirección "baja" que se confirma en este proyecto.** Hasta aquí todo lo
+     * confirmado vivía en el bloque alto `60 00 06 5x`, y eso se había convertido casi en una
+     * regla de trabajo. No lo es: el bloque alto es donde están las *perillas del panel*, no
+     * donde está todo lo escribible.
+     *
+     * Es además la vía por la que la app cambia la **variación**, ya que [AMP_VARIATION] no
+     * acepta escritura: ver [AmpCategory.typeValue].
      */
     val AMP_TYPE_FULL = Address(0x60, 0x00, 0x00, 0x21)
 
     /**
-     * ⚠️ **Variación del amplificador (el LED "VARIATION"), `60 00 06 5C`. SIN CONFIRMAR.**
+     * **Variación del amplificador (el LED "VARIATION"), `60 00 06 5C` — SOLO LECTURA.**
      *
-     * `00` off, `01` on. Fuentes: `reference/FxFloorboard/midi.xml:44107-44110`
-     * (`<DATA value="5C" ... abbr="led state" desc="Effect" customdesc="Variation">`),
+     * `00` off, `01` on. ✅ **Reporta** correctamente: pulsar el botón físico de variación
+     * actualiza el valor al instante. ❌ **No acepta escritura**: confirmado con el
+     * amplificador el 2026-09-03.
+     *
+     * El síntoma es característico y vale la pena saber reconocerlo: al mover el switch, la
+     * UI se encendía y **volvía sola a apagado un instante después**. Eso no era un fallo del
+     * control — era la app funcionando bien. La escritura optimista pone la caché en `01`, el
+     * amplificador ignora el SET y sigue reportando su estado real `00` por esta misma
+     * dirección, y el camino de mensajes espontáneos lo aplica. **Un valor que rebota solo es
+     * la firma de una dirección de solo reporte**, y solo se ve porque el edit mode y la
+     * actualización desde el amp están cableados.
+     *
+     * `midi.xml:44107-44110` la etiqueta `abbr="led state"` — el estado de un LED, no un
+     * control—, que en retrospectiva ya lo decía. Lo mismo cabe esperar de `06 5D`–`06 61`,
+     * los otros cinco `led state` del mismo bloque.
+     *
+     * **La variación se cambia por [AMP_TYPE_FULL]**, eligiendo el `Var [...]` de la categoría
+     * actual (`0x1C`–`0x20`): ver [AmpCategory.typeValue]. Es un caso real de "se lee en una
+     * dirección y se escribe en otra" — el patrón que se descartó para el reverb por ser una
+     * suposición. Aquí no se supone: está medido en las dos direcciones.
+     *
+     * Fuentes de la dirección: `reference/FxFloorboard/midi.xml:44107-44110`,
      * `reference/TuxKatana/doc/Adresses.txt:42-43` y `amplifier.yaml:4` (`am_var_sw`).
-     *
-     * Ojo: la variación **también** se puede pedir por [AMP_TYPE_FULL] eligiendo uno de los
-     * cinco `Var [...]` (`0x1C`–`0x20`). Si las dos vías funcionan habrá que decidir cuál usa
-     * la UI; por ahora se exponen las dos.
      */
     val AMP_VARIATION = Address(0x60, 0x00, 0x06, 0x5C)
 
     /**
-     * ⚠️ **Selector de color (verde/rojo/amarillo) de cada efecto. SIN CONFIRMAR.**
+     * **Selector de color (verde/rojo/amarillo) de cada efecto.**
+     *
+     * ✅ Confirmado con el amplificador (2026-09-03) en los cinco: cambiar el chip cambia el
+     * tipo de efecto, y pulsar el botón físico actualiza la app.
      *
      * El botón que hay bajo cada perilla de efecto, en direcciones consecutivas:
      *
@@ -358,22 +366,22 @@ object KatanaAddresses {
      * Valores `00|01|02` = verde/rojo/amarillo, ver [EffectColor]. **Tres fuentes de Mk2
      * coinciden** en direcciones y valores: `reference/FxFloorboard/midi.xml:3959-3963` —donde
      * "GRY" deletrea Green/Red/Yellow—, `reference/TuxKatana/doc/Adresses.txt:70, 83, 98, 112,
-     * 123` y los `*_bank_sel` de `reference/TuxKatana/params/*.yaml`. Es la mejor
-     * documentación que ha tenido ninguna dirección de este proyecto antes de probarla — lo
-     * que **sigue sin ser una prueba**.
+     * 123` y los `_bank_sel` de los YAML de `reference/TuxKatana/params/`. Era la mejor
+     * documentación que había tenido ninguna dirección del proyecto antes de probarla, y esta
+     * vez el hardware le dio la razón a las tres.
      */
     val BOOST_COLOR = Address(0x60, 0x00, 0x06, 0x39)
 
-    /** Ver [BOOST_COLOR]. `mo_bank_sel` en `mod.yaml:6`. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_COLOR]. `mo_bank_sel` en `mod.yaml:6`. ✅ Confirmado. */
     val MOD_COLOR = Address(0x60, 0x00, 0x06, 0x3A)
 
-    /** Ver [BOOST_COLOR]. `fx_bank_sel` en `fx.yaml:7`. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_COLOR]. `fx_bank_sel` en `fx.yaml:7`. ✅ Confirmado. */
     val FX_COLOR = Address(0x60, 0x00, 0x06, 0x3B)
 
-    /** Ver [BOOST_COLOR]. `de_bank_sel` en `delay.yaml:28`. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_COLOR]. `de_bank_sel` en `delay.yaml:28`. ✅ Confirmado. */
     val DELAY_COLOR = Address(0x60, 0x00, 0x06, 0x3C)
 
-    /** Ver [BOOST_COLOR]. `re_bank_sel` en `reverb.yaml:7`. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_COLOR]. `re_bank_sel` en `reverb.yaml:7`. ✅ Confirmado. */
     val REVERB_COLOR = Address(0x60, 0x00, 0x06, 0x3D)
 
     /**
@@ -394,7 +402,10 @@ object KatanaAddresses {
     }
 
     /**
-     * ⚠️ **On/off de cada efecto. SIN CONFIRMAR.**
+     * **On/off de cada efecto.**
+     *
+     * ✅ Confirmado con el amplificador (2026-09-03) en los cinco, y con ellos la suposición
+     * del sentido de los valores: `00` apaga, `01` enciende. También reportan.
      *
      * | Efecto | Dirección | Nombre en `midi.xml` | Fuente TuxKatana |
      * | --- | --- | --- | --- |
@@ -408,34 +419,128 @@ object KatanaAddresses {
      * 109`; **la de reverb no aparece en ese fichero** y sale solo de `reverb.yaml` y de
      * `midi.xml`.
      *
-     * ⚠️ **Son direcciones "bajas"**, no del bloque `06 5x`. Nada confirmado en este proyecto
-     * vive fuera del bloque alto, así que estas cinco son las más inciertas de todo el lote
-     * pese a estar bien documentadas.
+     * Son direcciones "bajas", fuera del bloque `06 5x`, y funcionan: junto con
+     * [AMP_TYPE_FULL] son la prueba de que el bloque alto no tenía nada de especial más allá
+     * de ser el de las perillas del panel.
      *
-     * ⚠️ **Y el sentido de los valores es una suposición.** Se asume `00` = off, `01` = on,
-     * porque es lo que hace `EDIT_MODE` (confirmado) y lo que dicen los bloques `<DATA>` de
-     * `midi.xml` (`00 name="Off"`, `01 name="On"`). Pero
-     * `reference/TuxKatana/doc/Adresses.txt:81` anota `[00|01] # [ON|OFF]`, que leído en orden
-     * diría lo contrario. Si al activar el switch el efecto se apaga, ahí está el motivo.
+     * De paso queda resuelta una duda que estaba anotada aquí: `Adresses.txt:81` anota
+     * `[00|01] # [ON|OFF]`, que leído en ese orden sugeriría `00` = ON. **Es al revés**, como
+     * en todo lo demás.
      */
     val BOOST_ENABLED = Address(0x60, 0x00, 0x00, 0x10)
 
-    /** Ver [BOOST_ENABLED]. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_ENABLED]. ✅ Confirmado. */
     val MOD_ENABLED = Address(0x60, 0x00, 0x01, 0x00)
 
-    /** Ver [BOOST_ENABLED]. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_ENABLED]. ✅ Confirmado. */
     val FX_ENABLED = Address(0x60, 0x00, 0x03, 0x00)
 
-    /** Ver [BOOST_ENABLED]. ⚠️ Sin confirmar. */
+    /** Ver [BOOST_ENABLED]. ✅ Confirmado. */
     val DELAY_ENABLED = Address(0x60, 0x00, 0x05, 0x00)
 
-    /** Ver [BOOST_ENABLED]. ⚠️ Sin confirmar; es la única que `Adresses.txt` no menciona. */
+    /** Ver [BOOST_ENABLED]. ✅ Confirmado; es la única que `Adresses.txt` no menciona. */
     val REVERB_ENABLED = Address(0x60, 0x00, 0x05, 0x40)
 
-    /** Valores de un on/off: `00` off, `01` on. Ver la advertencia de [BOOST_ENABLED]. */
+    // --- Tipo de efecto por slot de color (CLAUDE.md §5.2) --------------------------------
+    //
+    // ✅ **Resuelto con el amplificador el 2026-09-03, empezando por Booster**: de las dos
+    // candidatas, la que manda es la de **tipo activo** (la "baja"). Un SET ahí cambia el
+    // sonido, se corresponde con el color encendido en el panel, y la sincronización va en las
+    // dos direcciones: cambiar el color en el amplificador actualiza la app y al revés.
+    //
+    // Las direcciones `06 xx` por color **no** hicieron falta para escribir. Se conservan
+    // registradas porque vienen en el dump y reportan, así que dan gratis el contenido de los
+    // tres slots — que es justo lo que hará falta para editar presets.
+
+    /**
+     * **Tipo de Booster activo, `60 00 00 11`.** ✅ **Confirmado**: lectura y escritura.
+     *
+     * Uno de los 23 valores de [BoostType]. Refleja el tipo del **color seleccionado**, y esa
+     * relación estaba anotada antes de probarla: `reference/TuxKatana/doc/Adresses.txt:72-74`
+     * apunta `60 00 00 11: [0A|0B|0E]` observándolo en su propio amplificador. También la dan
+     * `booster.yaml:3` (`bo_type`) y `midi.xml:37113-37137`.
+     */
+    val BOOST_TYPE_ACTIVE = Address(0x60, 0x00, 0x00, 0x11)
+
+    /**
+     * **Tipo de MOD activo, `60 00 01 01`.** ⚠️ **Sin confirmar**, pero es la gemela exacta de
+     * [BOOST_TYPE_ACTIVE], que sí lo está.
+     *
+     * Uno de los 31 valores de [ModFxType]. Fuentes: `mod.yaml:3` (`mo_type`) y
+     * `midi.xml:37924-37956`. `Adresses.txt:86` trae la misma observación que para Booster —
+     * `60 00 01 01 -> [1D|14|13]` con los tres colores—, así que el patrón "la baja es la que
+     * manda" tiene aquí el mismo aval documental que tuvo Booster antes de confirmarse.
+     */
+    val MOD_TYPE_ACTIVE = Address(0x60, 0x00, 0x01, 0x01)
+
+    /**
+     * **Tipo de FX activo, `60 00 03 01`.** ⚠️ **Sin confirmar**, misma estructura que
+     * [MOD_TYPE_ACTIVE] y el mismo catálogo [ModFxType].
+     *
+     * Fuentes: `fx.yaml:3` (`fx_type`) y el bloque `LSB 03 "FX2"` de `midi.xml`.
+     */
+    val FX_TYPE_ACTIVE = Address(0x60, 0x00, 0x03, 0x01)
+
+    /**
+     * **Tipo de Delay 1 activo, `60 00 05 01`.** ⚠️ **Sin confirmar**, pero es la gemela
+     * exacta de [BOOST_TYPE_ACTIVE], que sí lo está.
+     *
+     * Uno de los 11 valores de [DelayType]. Fuentes: `delay.yaml:3` (`de_type`) y el bloque
+     * `LSB 05 "DD-RV-PDL"` de `midi.xml`, `DATA value="01" desc="Delay 1" customdesc="Type"`.
+     */
+    val DELAY_TYPE_ACTIVE = Address(0x60, 0x00, 0x05, 0x01)
+
+    /**
+     * **Tipo de Reverb activo, `60 00 05 41`.** ⚠️ **Sin confirmar**, misma estructura que
+     * [DELAY_TYPE_ACTIVE] y el mismo bloque `LSB 05`.
+     *
+     * Uno de los 7 valores de [ReverbType]. Fuentes: `reverb.yaml:3` (`re_type`) y
+     * `midi.xml`, `DATA value="41" desc="Reverb" customdesc="Type"`.
+     */
+    val REVERB_TYPE_ACTIVE = Address(0x60, 0x00, 0x05, 0x41)
+
+    /**
+     * **Tipo asignado a cada slot de color**, por efecto. ⚠️ **Solo reportan; no se usan para
+     * escribir** — la escritura va por las direcciones de tipo activo de arriba.
+     *
+     * Bloque contiguo y regular, tres direcciones por efecto en orden verde/rojo/amarillo,
+     * indexadas por el valor de [EffectColor] (`00|01|02`):
+     *
+     * | Efecto | Verde | Rojo | Amarillo |
+     * | --- | --- | --- | --- |
+     * | Booster | `60 00 06 24` | `06 25` | `06 26` |
+     * | Mod | `60 00 06 27` | `06 28` | `06 29` |
+     * | FX | `60 00 06 2A` | `06 2B` | `06 2C` |
+     * | Delay 1 | `60 00 06 2D` | `06 2E` | `06 2F` |
+     * | Reverb | `60 00 06 30` | `06 31` | `06 32` |
+     *
+     * El color **no es un efecto, es un slot con su propio tipo**, y eso es por preset. Dos
+     * fuentes de Mk2 coinciden: los `*_type_G/R/Y` de `booster.yaml:11-13`, `mod.yaml:4-6`,
+     * `fx.yaml:4-6`, `delay.yaml:25-27` y `reverb.yaml:4-6`, y `midi.xml:43567-43897`, que
+     * nombra cada dirección con su efecto y su color explícitos
+     * (`desc="Booster" customdesc="GREEN"`).
+     *
+     * El bloque sigue con Delay 2 (`06 33`–`35`) y el modo RV/DD2 (`06 36`–`38`); ver
+     * CLAUDE.md §5.2.
+     */
+    val BOOST_TYPE_BY_COLOR: List<Address> = colorSlots(0x24)
+
+    /** Ver [BOOST_TYPE_BY_COLOR]. `mo_type_G/R/Y` en `mod.yaml:4-6`. */
+    val MOD_TYPE_BY_COLOR: List<Address> = colorSlots(0x27)
+
+    /** Ver [BOOST_TYPE_BY_COLOR]. `fx_type_G/R/Y` en `fx.yaml:4-6`. */
+    val FX_TYPE_BY_COLOR: List<Address> = colorSlots(0x2A)
+
+    /** Ver [BOOST_TYPE_BY_COLOR]. `de_type_G/R/Y` en `delay.yaml:25-27`. */
+    val DELAY_TYPE_BY_COLOR: List<Address> = colorSlots(0x2D)
+
+    /** Ver [BOOST_TYPE_BY_COLOR]. `re_type_G/R/Y` en `reverb.yaml:4-6`. */
+    val REVERB_TYPE_BY_COLOR: List<Address> = colorSlots(0x30)
+
+    /** Valores de un on/off: `00` off, `01` on. ✅ Confirmado (2026-09-03). */
     val SWITCH_VALUES: List<Int> = listOf(0x00, 0x01)
 
-    /** Payload de "encendido" para los on/off y para [AMP_VARIATION]. */
+    /** Payload de "encendido" para los on/off. */
     const val SWITCH_ON = 0x01
 
     /** Payload de "apagado". */
@@ -457,30 +562,6 @@ object KatanaAddresses {
      * `reference/TuxKatana/doc/Adresses.txt:134-138` la empareja con la baja.
      */
     val PRESENCE_LEVEL = Address(0x60, 0x00, 0x06, 0x56)
-
-    /**
-     * ⚠️ Rango de [PRESENCE_LEVEL]: `0..100`, **suposición razonada**, no un dato documentado
-     * —a diferencia de la dirección, que sí está confirmada—.
-     *
-     * Ninguna fuente de Mk2 documenta el rango de `60 00 06 56`; `amplifier.yaml` se salta esa
-     * dirección entera. `0..100` sale por analogía con dos sitios: el mapa del **MK1** en
-     * `reference/katana-midi-bridge/parameters/amplifier.json:68-72`, que da `presence` como
-     * `byteRange [0, 100]`, y el formato `normal` de
-     * `reference/TuxKatana/params/slider_formats.yaml:1-3`, el que usan los niveles de panel.
-     * Coincide además con [REVERB_LEVEL_RANGE].
-     *
-     * **Recordatorio para el futuro**: si aparece comportamiento raro en los extremos —que el
-     * amplificador ignore valores cerca de 100, o que el slider no cubra todo el recorrido
-     * real de la perilla física— este rango es el primer sospechoso, no la dirección.
-     *
-     * **Probado en el amplificador (2026-09-03) y aceptado.** El slider llega a 100 cuando la
-     * perilla física está a punto del tope, quedando un tramo mínimo de recorrido. No se sabe
-     * si el 100 real está en el tope físico o si ese resto es holgura mecánica, y la
-     * diferencia entre 98 y 100 es inaudible, así que **se da el rango por bueno**. Si alguna
-     * vez hace falta zanjarlo, no hace falta el oído: con Edit Mode activo, girar la perilla
-     * hasta el tope y leer el valor que reporta el amplificador lo dice sin ambigüedad.
-     */
-    val PRESENCE_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de Presence, `60 00 00 27`, **tampoco probada**.
@@ -520,32 +601,53 @@ object KatanaAddresses {
      */
     val BOOST_LEVEL = Address(0x60, 0x00, 0x06, 0x57)
 
-    /**
-     * ⚠️ Rango de [BOOST_LEVEL]: `0..100`, **suposición razonada**, no un dato documentado. Igual que
-     * [PRESENCE_LEVEL_RANGE] y por los mismos motivos: ninguna fuente de Mk2 lo documenta.
-     * `booster.yaml` no anota rango para `bo_vol_lvl`, y `Adresses.txt:84` solo apunta valores
-     * observados (`60 00 06 57: [49|--|55]`, o sea 73 y 85 en decimal) — que al menos
-     * descartan el `complexRange` de `Off + 0..50` con que
-     * `reference/katana-midi-bridge/parameters/amplifier.json:73-77` codifica el booster del
-     * MK1, porque 73 y 85 se salen de ahí.
-     *
-     * **Probado en el amplificador (2026-09-03) y aceptado.** El slider llega a 100 cuando la
-     * perilla física está a punto del tope, quedando un tramo mínimo de recorrido. No se sabe
-     * si el 100 real está en el tope físico o si ese resto es holgura mecánica, y la
-     * diferencia entre 98 y 100 es inaudible, así que **se da el rango por bueno**. Si alguna
-     * vez hace falta zanjarlo, no hace falta el oído: con Edit Mode activo, girar la perilla
-     * hasta el tope y leer el valor que reporta el amplificador lo dice sin ambigüedad.
-     */
-    val BOOST_LEVEL_RANGE = 0..100
+    // --- Parámetros internos de Booster, `60 00 00 12`–`18` (CLAUDE.md §5.2) --------------
+    //
+    // ⚠️ Implementados, **pendientes de confirmar con audio** — ver BACKLOG.md, "Pendiente
+    // por probar". Dos fuentes de Mk2 coinciden en las siete direcciones:
+    // `reference/TuxKatana/params/booster.yaml:4-9` y
+    // `reference/FxFloorboard/midi.xml:37109-37304` (el bloque `PRE`, `DATA value="1x"`).
+    //
+    // `60 00 00 19`–`1E` (Custom Type + Bottom/Top/Low/High/Character del modo "pedal
+    // custom") quedan **sin implementar a propósito**: es el modo menos prioritario y tiene
+    // su propio sub-catálogo (`midi.xml:37280-37304`).
 
     /**
-     * ⚠️ Alternativa "baja" de Boost, `60 00 00 12` (`bo_drive_lvl`), **sin probar**.
+     * **Drive, `60 00 00 12`.** Antes documentada como "alternativa baja de [BOOST_LEVEL],
+     * sin probar" — con el bloque interno completo entendido, no es una alternativa a la
+     * perilla del panel, es el parámetro de distorsión del propio Booster.
      *
-     * Fuentes: `reference/TuxKatana/params/booster.yaml:6` y
-     * `reference/TuxKatana/doc/Adresses.txt:83`. Solo se prueba si [BOOST_LEVEL] falla, y
-     * entonces con audio, no por descarte.
+     * Escala directa `00..78` (0..120): [BOOST_DRIVE_SCALE].
      */
-    val BOOST_LEVEL_LOW = Address(0x60, 0x00, 0x00, 0x12)
+    val BOOST_DRIVE = Address(0x60, 0x00, 0x00, 0x12)
+
+    /** Rango de [BOOST_DRIVE]: `00/78/0/120`, directo. */
+    val BOOST_DRIVE_SCALE: LevelScale = LevelScale.direct(0..120)
+
+    /** **Bottom, `60 00 00 13`.** Escala centrada `00/64/-50/+50`: [CENTERED_TRIM_SCALE]. */
+    val BOOST_BOTTOM = Address(0x60, 0x00, 0x00, 0x13)
+
+    /** **Tone, `60 00 00 14`.** Misma escala que [BOOST_BOTTOM]. */
+    val BOOST_TONE = Address(0x60, 0x00, 0x00, 0x14)
+
+    /**
+     * Escala compartida de los recortes de agudos/graves centrados en cero: `raw = display +
+     * 50`. Además de [BOOST_BOTTOM]/[BOOST_TONE], es la misma forma que tendrán Bottom/Top/
+     * Low/High/Character del modo custom (`60 00 00 1A`–`1E`) el día que se implementen.
+     */
+    val CENTERED_TRIM_SCALE: LevelScale = LevelScale.centered(50)
+
+    /** **Solo Sw, `60 00 00 15`.** On/off: usa [SWITCH_VALUES]. */
+    val BOOST_SOLO_ENABLED = Address(0x60, 0x00, 0x00, 0x15)
+
+    /** **Solo Level, `60 00 00 16`.** Escala directa `00/64` = 0..100: [PANEL_LEVEL_SCALE]. */
+    val BOOST_SOLO_LEVEL = Address(0x60, 0x00, 0x00, 0x16)
+
+    /** **Effect Level, `60 00 00 17`.** Escala directa `00/64` = 0..100: [PANEL_LEVEL_SCALE]. */
+    val BOOST_EFFECT_LEVEL = Address(0x60, 0x00, 0x00, 0x17)
+
+    /** **Direct Mix, `60 00 00 18`.** Escala directa `00/64` = 0..100: [PANEL_LEVEL_SCALE]. */
+    val BOOST_DIRECT_MIX = Address(0x60, 0x00, 0x00, 0x18)
 
     /**
      * **Mod (perilla MOD), `60 00 06 58`.** Dirección de lectura y escritura.
@@ -565,22 +667,6 @@ object KatanaAddresses {
      * `60 00 01 00`; que esos no reporten por esta dirección es lo esperado.
      */
     val MOD_LEVEL = Address(0x60, 0x00, 0x06, 0x58)
-
-    /**
-     * ⚠️ Rango de [MOD_LEVEL]: `0..100`, **suposición razonada**, no un dato documentado, por los mismos motivos
-     * que [PRESENCE_LEVEL_RANGE] y [BOOST_LEVEL_RANGE]: ninguna fuente de Mk2 lo documenta.
-     * `mod.yaml` no anota rango para `mo_vol_lvl`, y los valores que apunta
-     * `reference/TuxKatana/doc/Adresses.txt:99` (`60 00 06 58 -> [1E|1B|55]`, o sea 30, 27 y
-     * 85) son observaciones sueltas por color, no un rango.
-     *
-     * **Probado en el amplificador (2026-09-03) y aceptado.** El slider llega a 100 cuando la
-     * perilla física está a punto del tope, quedando un tramo mínimo de recorrido. No se sabe
-     * si el 100 real está en el tope físico o si ese resto es holgura mecánica, y la
-     * diferencia entre 98 y 100 es inaudible, así que **se da el rango por bueno**. Si alguna
-     * vez hace falta zanjarlo, no hace falta el oído: con Edit Mode activo, girar la perilla
-     * hasta el tope y leer el valor que reporta el amplificador lo dice sin ambigüedad.
-     */
-    val MOD_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativas "bajas" de Mod, **sin probar**: `60 00 02 38` y `60 00 02 3C`.
@@ -609,19 +695,6 @@ object KatanaAddresses {
      * Botón de color en [FX_COLOR]; on/off del efecto en `60 00 03 00`.
      */
     val FX_LEVEL = Address(0x60, 0x00, 0x06, 0x59)
-
-    /**
-     * ⚠️ Rango de [FX_LEVEL]: `0..100`, **suposición razonada**, no un dato documentado, mismo caso que
-     * [PRESENCE_LEVEL_RANGE]: ninguna fuente de Mk2 documenta el rango de esta dirección.
-     *
-     * **Probado en el amplificador (2026-09-03) y aceptado.** El slider llega a 100 cuando la
-     * perilla física está a punto del tope, quedando un tramo mínimo de recorrido. No se sabe
-     * si el 100 real está en el tope físico o si ese resto es holgura mecánica, y la
-     * diferencia entre 98 y 100 es inaudible, así que **se da el rango por bueno**. Si alguna
-     * vez hace falta zanjarlo, no hace falta el oído: con Edit Mode activo, girar la perilla
-     * hasta el tope y leer el valor que reporta el amplificador lo dice sin ambigüedad.
-     */
-    val FX_LEVEL_RANGE = 0..100
 
     /**
      * ⚠️ Alternativa "baja" de FX, `60 00 04 14`, **que nunca hizo falta probar**: [FX_LEVEL]
@@ -662,21 +735,6 @@ object KatanaAddresses {
     val DELAY_LEVEL = Address(0x60, 0x00, 0x06, 0x5A)
 
     /**
-     * ⚠️ Rango de [DELAY_LEVEL]: `0..100`, **suposición razonada**, no un dato documentado.
-     * `delay.yaml` sí anota
-     * rangos para varios parámetros del delay (`de_time_lvl` es `1ms..2s`, por ejemplo) pero
-     * **no para `de_vol_lvl`**, que es esta.
-     *
-     * **Probado en el amplificador (2026-09-03) y aceptado.** El slider llega a 100 cuando la
-     * perilla física está a punto del tope, quedando un tramo mínimo de recorrido. No se sabe
-     * si el 100 real está en el tope físico o si ese resto es holgura mecánica, y la
-     * diferencia entre 98 y 100 es inaudible, así que **se da el rango por bueno**. Si alguna
-     * vez hace falta zanjarlo, no hace falta el oído: con Edit Mode activo, girar la perilla
-     * hasta el tope y leer el valor que reporta el amplificador lo dice sin ambigüedad.
-     */
-    val DELAY_LEVEL_RANGE = 0..100
-
-    /**
      * ⚠️ Alternativas "bajas" de Delay, **que nunca hicieron falta probar**: `60 00 05 06`
      * (`de_effect_lvl`) y `60 00 05 04` (`de_feedback_lvl`, que `Adresses.txt:127` marca con
      * `?`). Se conservan por si Delay diera problemas más adelante.
@@ -685,6 +743,42 @@ object KatanaAddresses {
         Address(0x60, 0x00, 0x05, 0x06),
         Address(0x60, 0x00, 0x05, 0x04),
     )
+
+    // --- Canal/preset activo ---------------------------------------------------------------
+    //
+    // ⚠️ Investigado (CLAUDE.md §5.1), **sin confirmar contra el amplificador** (2026-09-03).
+
+    /**
+     * **Canal/preset activo, `00 01 00 00`.** Lectura y escritura.
+     *
+     * ⚠️ **Sin confirmar contra el amplificador.** La dirección y los valores son la
+     * conclusión de la investigación documental de CLAUDE.md §5.1, con tres fuentes de Mk2
+     * independientes de acuerdo entre sí:
+     *  - `reference/TuxKatana/widgets/switcher.py:75-88` indexa un único `ch_num` 1..8 sobre
+     *    los dos bancos, prueba de que es un solo campo y no banco+canal separados.
+     *  - `reference/TuxKatana/params/config.yaml:8-17` da los 8 valores con su checksum.
+     *  - `reference/katana-midi-bridge/globals.py:14-15` fija `CURRENT_PRESET_ADDR` y
+     *    `CURRENT_PRESET_LEN = 0x02`.
+     *
+     * **Es la única dirección de este fichero cuyo dato son 2 bytes, no 1** — de ahí que
+     * [dev.alonx3.ktnacontrol.device.KatanaRepository] la registre con `byteWidth = 2`. El
+     * byte extra es siempre `00` en las fuentes (el valor entero cabe en el segundo byte), así
+     * que no se sabe si un SET de 1 byte también funcionaría; eso solo lo dirá el hardware.
+     *
+     * Se puede leer por dos vías, sin que hiciera falta elegir una para implementar esto: un
+     * GET explícito (`reference/katana-midi-bridge/doc/katana_sysex.txt:180-198`, que exige
+     * edit mode, igual que los demás GET de este proyecto) o el reporte espontáneo que ya
+     * llega solo con edit mode activo (`reference/TuxKatana/lib/controller.py:95-98`).
+     */
+    val ACTIVE_CHANNEL = Address(0x00, 0x01, 0x00, 0x00)
+
+    /**
+     * Valores de [ACTIVE_CHANNEL]: `0` Panel, `1`..`4` Banco A canales 1-4, `5`..`8` Banco B
+     * canales 1-4. Las dos numeraciones física y de Program Change **no coinciden** —el panel
+     * es `4` en Program Change, no `0`— pero esto es SysEx, así que no aplica: ver CLAUDE.md
+     * §5.1.
+     */
+    val ACTIVE_CHANNEL_VALUES: List<Int> = (0..8).toList()
 
     /**
      * Edit mode, also called "BTS control mode": `00` off, `01` on.
@@ -704,6 +798,13 @@ object KatanaAddresses {
 
     /** Payload that turns [EDIT_MODE] off. */
     const val EDIT_MODE_OFF: Byte = 0x00
+
+    /**
+     * The three colour slots of one effect, starting at [greenByte] in the `60 00 06 xx`
+     * block: verde, rojo, amarillo, en el orden de [EffectColor].
+     */
+    private fun colorSlots(greenByte: Int): List<Address> =
+        List(3) { colorValue -> Address(0x60, 0x00, 0x06, greenByte + colorValue) }
 
     /**
      * Address of the name of preset [number], counting from 1 the way the amp's front panel
