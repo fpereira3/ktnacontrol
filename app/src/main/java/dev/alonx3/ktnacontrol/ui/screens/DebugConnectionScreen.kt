@@ -64,8 +64,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.alonx3.ktnacontrol.protocol.AmpCategory
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.BoostType
+import dev.alonx3.ktnacontrol.protocol.DelayHighCutFrequency
 import dev.alonx3.ktnacontrol.protocol.DelayType
 import dev.alonx3.ktnacontrol.protocol.ModFxType
+import dev.alonx3.ktnacontrol.protocol.ReverbHighCutFrequency
+import dev.alonx3.ktnacontrol.protocol.ReverbLowCutFrequency
 import dev.alonx3.ktnacontrol.protocol.ReverbType
 import dev.alonx3.ktnacontrol.protocol.EffectColor
 import dev.alonx3.ktnacontrol.R
@@ -109,6 +112,12 @@ fun DebugConnectionScreen(
     val effectTypes by viewModel.effectTypes.collectAsStateWithLifecycle()
     val boosterParams by viewModel.boosterParams.collectAsStateWithLifecycle()
     val boosterSoloEnabled by viewModel.boosterSoloEnabled.collectAsStateWithLifecycle()
+    val ampSoloLevel by viewModel.ampSoloLevel.collectAsStateWithLifecycle()
+    val delayParams by viewModel.delayParams.collectAsStateWithLifecycle()
+    val reverbParams by viewModel.reverbParams.collectAsStateWithLifecycle()
+    val reverbTime by viewModel.reverbTime.collectAsStateWithLifecycle()
+    val modChorusPreDelayLow by viewModel.modChorusPreDelayLow.collectAsStateWithLifecycle()
+    val modChorusPreDelayHigh by viewModel.modChorusPreDelayHigh.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboard.current
@@ -126,6 +135,12 @@ fun DebugConnectionScreen(
         effectTypes = effectTypes,
         boosterParams = boosterParams,
         boosterSoloEnabled = boosterSoloEnabled,
+        ampSoloLevel = ampSoloLevel,
+        delayParams = delayParams,
+        reverbParams = reverbParams,
+        reverbTime = reverbTime,
+        modChorusPreDelayLow = modChorusPreDelayLow,
+        modChorusPreDelayHigh = modChorusPreDelayHigh,
         editMode = editMode,
         snackbarHostState = snackbarHostState,
         onScanClicked = viewModel::onScanClicked,
@@ -146,6 +161,18 @@ fun DebugConnectionScreen(
         onBoosterParamChanged = viewModel::onBoosterParamChanged,
         onReadBoosterParamClicked = viewModel::onReadBoosterParamClicked,
         onBoosterSoloEnabledChanged = viewModel::onBoosterSoloEnabledChanged,
+        onAmpSoloLevelChanged = viewModel::onAmpSoloLevelChanged,
+        onReadAmpSoloLevelClicked = viewModel::onReadAmpSoloLevelClicked,
+        onDelayParamChanged = viewModel::onDelayParamChanged,
+        onReadDelayParamClicked = viewModel::onReadDelayParamClicked,
+        onReverbParamChanged = viewModel::onReverbParamChanged,
+        onReadReverbParamClicked = viewModel::onReadReverbParamClicked,
+        onReverbTimeChanged = viewModel::onReverbTimeChanged,
+        onReadReverbTimeClicked = viewModel::onReadReverbTimeClicked,
+        onModChorusPreDelayLowChanged = viewModel::onModChorusPreDelayLowChanged,
+        onReadModChorusPreDelayLowClicked = viewModel::onReadModChorusPreDelayLowClicked,
+        onModChorusPreDelayHighChanged = viewModel::onModChorusPreDelayHighChanged,
+        onReadModChorusPreDelayHighClicked = viewModel::onReadModChorusPreDelayHighClicked,
         onCopyLog = { text ->
             scope.launch {
                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(CLIP_LABEL, text)))
@@ -169,6 +196,9 @@ private fun DebugConnectionScreen(
     effectTypes: Map<EffectId, Int?>,
     boosterParams: Map<BoosterParamId, Int?>,
     boosterSoloEnabled: Boolean?,
+    ampSoloLevel: Int?,
+    delayParams: Map<DelayParamId, Int?>,
+    reverbParams: Map<ReverbParamId, Int?>,
     editMode: Boolean,
     snackbarHostState: SnackbarHostState,
     onScanClicked: () -> Unit,
@@ -189,6 +219,21 @@ private fun DebugConnectionScreen(
     onBoosterParamChanged: (BoosterParamId, Int) -> Unit,
     onReadBoosterParamClicked: (BoosterParamId) -> Unit,
     onBoosterSoloEnabledChanged: (Boolean) -> Unit,
+    onAmpSoloLevelChanged: (Int) -> Unit,
+    onReadAmpSoloLevelClicked: () -> Unit,
+    onDelayParamChanged: (DelayParamId, Int) -> Unit,
+    onReadDelayParamClicked: (DelayParamId) -> Unit,
+    onReverbParamChanged: (ReverbParamId, Int) -> Unit,
+    onReadReverbParamClicked: (ReverbParamId) -> Unit,
+    reverbTime: Double?,
+    onReverbTimeChanged: (Double) -> Unit,
+    onReadReverbTimeClicked: () -> Unit,
+    modChorusPreDelayLow: Double?,
+    modChorusPreDelayHigh: Double?,
+    onModChorusPreDelayLowChanged: (Double) -> Unit,
+    onReadModChorusPreDelayLowClicked: () -> Unit,
+    onModChorusPreDelayHighChanged: (Double) -> Unit,
+    onReadModChorusPreDelayHighClicked: () -> Unit,
     onCopyLog: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -270,9 +315,27 @@ private fun DebugConnectionScreen(
                         onEffectTypeChanged = onEffectTypeChanged,
                         boosterParams = boosterParams,
                         boosterSoloEnabled = boosterSoloEnabled,
+                        ampSoloLevel = ampSoloLevel,
+                        delayParams = delayParams,
+                        reverbParams = reverbParams,
                         onBoosterParamChanged = onBoosterParamChanged,
                         onReadBoosterParamClicked = onReadBoosterParamClicked,
                         onBoosterSoloEnabledChanged = onBoosterSoloEnabledChanged,
+                        onAmpSoloLevelChanged = onAmpSoloLevelChanged,
+                        onReadAmpSoloLevelClicked = onReadAmpSoloLevelClicked,
+                        onDelayParamChanged = onDelayParamChanged,
+                        onReadDelayParamClicked = onReadDelayParamClicked,
+                        onReverbParamChanged = onReverbParamChanged,
+                        onReadReverbParamClicked = onReadReverbParamClicked,
+                reverbTime = reverbTime,
+                onReverbTimeChanged = onReverbTimeChanged,
+                onReadReverbTimeClicked = onReadReverbTimeClicked,
+                modChorusPreDelayLow = modChorusPreDelayLow,
+                modChorusPreDelayHigh = modChorusPreDelayHigh,
+                onModChorusPreDelayLowChanged = onModChorusPreDelayLowChanged,
+                onReadModChorusPreDelayLowClicked = onReadModChorusPreDelayLowClicked,
+                onModChorusPreDelayHighChanged = onModChorusPreDelayHighChanged,
+                onReadModChorusPreDelayHighClicked = onReadModChorusPreDelayHighClicked,
                     )
                 }
             }
@@ -389,12 +452,36 @@ private fun SlidersPane(
     onEffectTypeChanged: (EffectId, Int) -> Unit,
     boosterParams: Map<BoosterParamId, Int?>,
     boosterSoloEnabled: Boolean?,
+    ampSoloLevel: Int?,
+    delayParams: Map<DelayParamId, Int?>,
+    reverbParams: Map<ReverbParamId, Int?>,
     onBoosterParamChanged: (BoosterParamId, Int) -> Unit,
     onReadBoosterParamClicked: (BoosterParamId) -> Unit,
     onBoosterSoloEnabledChanged: (Boolean) -> Unit,
+    onAmpSoloLevelChanged: (Int) -> Unit,
+    onReadAmpSoloLevelClicked: () -> Unit,
+    onDelayParamChanged: (DelayParamId, Int) -> Unit,
+    onReadDelayParamClicked: (DelayParamId) -> Unit,
+    onReverbParamChanged: (ReverbParamId, Int) -> Unit,
+    onReadReverbParamClicked: (ReverbParamId) -> Unit,
+    reverbTime: Double?,
+    onReverbTimeChanged: (Double) -> Unit,
+    onReadReverbTimeClicked: () -> Unit,
+    modChorusPreDelayLow: Double?,
+    modChorusPreDelayHigh: Double?,
+    onModChorusPreDelayLowChanged: (Double) -> Unit,
+    onReadModChorusPreDelayLowClicked: () -> Unit,
+    onModChorusPreDelayHighChanged: (Double) -> Unit,
+    onReadModChorusPreDelayHighClicked: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val connected = state is UsbConnectionState.Connected
+
+    // El contrato de Edit Mode (CLAUDE.md §4.2): **apagado deja cambiar de canal y nada más**.
+    // Sin edit mode el amplificador no manda reportes espontáneos, así que la app no puede
+    // confirmar ningún parámetro que escriba — mostrar los controles como si funcionaran sería
+    // mentir. El canal es la excepción deliberada: es un comando básico, no un ajuste fino.
+    val canEdit = connected && editMode
 
     Column(
         modifier = modifier
@@ -410,10 +497,16 @@ private fun SlidersPane(
             enabled = connected,
             onEditModeChanged = onEditModeChanged,
         )
+        if (connected && !editMode) {
+            EditModeNotice()
+        }
         HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
 
-        // ⚠️ Investigado, sin confirmar contra el amplificador (CLAUDE.md §5.1). 9 valores:
-        // Panel + los 8 canales de los dos bancos.
+        // ✅ Confirmado en las dos direcciones (CLAUDE.md §5.1). 9 valores: Panel + los 8
+        // canales de los dos bancos.
+        //
+        // **Único control que sigue habilitado con Edit Mode apagado**, a propósito: cambiar
+        // de canal es la operación que el contrato deja siempre disponible.
         SectionHeader(stringResource(R.string.section_channel))
         ChipSelector(
             label = stringResource(R.string.section_channel),
@@ -428,14 +521,14 @@ private fun SlidersPane(
             label = stringResource(R.string.amp_category),
             options = AmpCategory.entries.map { it.value to it.displayName },
             selected = selectors[SelectorId.AMP_CATEGORY],
-            enabled = connected,
+            enabled = canEdit,
             onSelected = { value -> onSelectorChanged(SelectorId.AMP_CATEGORY, value) },
         )
         DropdownSelector(
             label = stringResource(R.string.amp_type),
             options = AmpType.entries.map { it.value to it.displayName },
             selected = selectors[SelectorId.AMP_TYPE],
-            enabled = connected,
+            enabled = canEdit,
             onSelected = { value -> onSelectorChanged(SelectorId.AMP_TYPE, value) },
         )
         // El switch **lee** de `06 5C` y **escribe** por el modelo (`00 21`): esa dirección
@@ -444,12 +537,54 @@ private fun SlidersPane(
         SwitchRow(
             label = stringResource(R.string.amp_variation),
             checked = selectors[SelectorId.AMP_VARIATION] == SWITCH_ON_VALUE,
-            enabled = connected && variationApplies,
+            enabled = canEdit && variationApplies,
             onCheckedChange = onAmpVariationChanged,
         )
 
+        // ⚠️ Resto del bloque PREAMP (`60 00 00 29`-`2C`), sin confirmar todavía — ver
+        // BACKLOG.md, "Pendiente por probar".
+        SwitchRow(
+            label = stringResource(R.string.amp_bright),
+            checked = selectors[SelectorId.AMP_BRIGHT] == SWITCH_ON_VALUE,
+            enabled = canEdit,
+            onCheckedChange = { on ->
+                onSelectorChanged(
+                    SelectorId.AMP_BRIGHT,
+                    if (on) SWITCH_ON_VALUE else SWITCH_OFF_VALUE,
+                )
+            },
+        )
+        ChipSelector(
+            label = stringResource(R.string.amp_gain_sw),
+            options = gainSwOptions(),
+            selected = selectors[SelectorId.AMP_GAIN_SW],
+            enabled = canEdit,
+            onSelected = { value -> onSelectorChanged(SelectorId.AMP_GAIN_SW, value) },
+        )
+        SwitchRow(
+            label = stringResource(R.string.amp_solo),
+            checked = selectors[SelectorId.AMP_SOLO] == SWITCH_ON_VALUE,
+            enabled = canEdit,
+            onCheckedChange = { on ->
+                onSelectorChanged(
+                    SelectorId.AMP_SOLO,
+                    if (on) SWITCH_ON_VALUE else SWITCH_OFF_VALUE,
+                )
+            },
+        )
+        LevelControl(
+            label = stringResource(
+                R.string.amp_solo_level,
+                ampSoloLevel?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
+            ),
+            level = ampSoloLevel,
+            enabled = canEdit,
+            onLevelChanged = onAmpSoloLevelChanged,
+            onRead = onReadAmpSoloLevelClicked,
+        )
+
         AMP_LEVELS.forEach { id ->
-            LevelRow(id, levels[id], connected, onLevelChanged, onReadLevelClicked)
+            LevelRow(id, levels[id], canEdit, onLevelChanged, onReadLevelClicked)
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -462,7 +597,7 @@ private fun SlidersPane(
                 color = effectColors[effect],
                 enabled = effectEnabled[effect],
                 type = effectTypes[effect],
-                connected = connected,
+                canEdit = canEdit,
                 onLevelChanged = onLevelChanged,
                 onReadLevelClicked = onReadLevelClicked,
                 onColorChanged = onEffectColorChanged,
@@ -473,6 +608,23 @@ private fun SlidersPane(
                 onBoosterParamChanged = onBoosterParamChanged,
                 onReadBoosterParamClicked = onReadBoosterParamClicked,
                 onBoosterSoloEnabledChanged = onBoosterSoloEnabledChanged,
+                delayParams = delayParams,
+                reverbParams = reverbParams,
+                selectors = selectors,
+                onSelectorChanged = onSelectorChanged,
+                onDelayParamChanged = onDelayParamChanged,
+                onReadDelayParamClicked = onReadDelayParamClicked,
+                onReverbParamChanged = onReverbParamChanged,
+                onReadReverbParamClicked = onReadReverbParamClicked,
+                reverbTime = reverbTime,
+                onReverbTimeChanged = onReverbTimeChanged,
+                onReadReverbTimeClicked = onReadReverbTimeClicked,
+                modChorusPreDelayLow = modChorusPreDelayLow,
+                modChorusPreDelayHigh = modChorusPreDelayHigh,
+                onModChorusPreDelayLowChanged = onModChorusPreDelayLowChanged,
+                onReadModChorusPreDelayLowClicked = onReadModChorusPreDelayLowClicked,
+                onModChorusPreDelayHighChanged = onModChorusPreDelayHighChanged,
+                onReadModChorusPreDelayHighClicked = onReadModChorusPreDelayHighClicked,
             )
         }
     }
@@ -490,6 +642,9 @@ private val AMP_LEVELS: List<LevelId> =
 /** `01` is "on" for every switch here. See `KatanaAddresses.BOOST_ENABLED` for the caveat. */
 private const val SWITCH_ON_VALUE = 0x01
 
+/** `00` is "off" — the other half of [SWITCH_ON_VALUE], spelled out for `AMP_BRIGHT`/`AMP_SOLO`. */
+private const val SWITCH_OFF_VALUE = 0x00
+
 /**
  * The 9 values of the active-channel selector, labelled the way the front panel groups them:
  * Panel, then bank A 1-4, then bank B 1-4. See `KatanaAddresses.ACTIVE_CHANNEL`.
@@ -502,6 +657,14 @@ private fun channelOptions(): List<Pair<Int, String>> {
     return listOf(panel) + bankA + bankB
 }
 
+/** The 3 values of `AMP_GAIN_SW` (`60 00 00 2A`): Low / Middle / High. */
+@Composable
+private fun gainSwOptions(): List<Pair<Int, String>> = listOf(
+    0x00 to stringResource(R.string.amp_gain_sw_low),
+    0x01 to stringResource(R.string.amp_gain_sw_middle),
+    0x02 to stringResource(R.string.amp_gain_sw_high),
+)
+
 @Composable
 private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
@@ -511,11 +674,28 @@ private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * Explains why every parameter below is greyed out while Edit Mode is off.
+ *
+ * Un control deshabilitado sin explicación se lee como un bug; con una línea de texto se lee
+ * como una regla. Solo aparece con el amplificador conectado: sin conexión ya está todo
+ * apagado por otra razón y dos avisos a la vez no aclaran nada.
+ */
+@Composable
+private fun EditModeNotice(modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.edit_mode_required),
+        modifier = modifier.fillMaxWidth().padding(bottom = 4.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
 @Composable
 private fun LevelRow(
     id: LevelId,
     level: Int?,
-    connected: Boolean,
+    canEdit: Boolean,
     onLevelChanged: (LevelId, Int) -> Unit,
     onReadLevelClicked: (LevelId) -> Unit,
 ) {
@@ -525,7 +705,7 @@ private fun LevelRow(
             level?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
         ),
         level = level,
-        enabled = connected,
+        enabled = canEdit,
         onLevelChanged = { value -> onLevelChanged(id, value) },
         onRead = { onReadLevelClicked(id) },
     )
@@ -545,7 +725,8 @@ private fun EffectCard(
     color: Int?,
     enabled: Boolean?,
     type: Int?,
-    connected: Boolean,
+    /** Todo lo de esta tarjeta es un parámetro, así que todo cae bajo el contrato de Edit Mode. */
+    canEdit: Boolean,
     onLevelChanged: (LevelId, Int) -> Unit,
     onReadLevelClicked: (LevelId) -> Unit,
     onColorChanged: (EffectId, Int) -> Unit,
@@ -556,6 +737,23 @@ private fun EffectCard(
     onBoosterParamChanged: (BoosterParamId, Int) -> Unit,
     onReadBoosterParamClicked: (BoosterParamId) -> Unit,
     onBoosterSoloEnabledChanged: (Boolean) -> Unit,
+    delayParams: Map<DelayParamId, Int?>,
+    reverbParams: Map<ReverbParamId, Int?>,
+    selectors: Map<SelectorId, Int?>,
+    onSelectorChanged: (SelectorId, Int) -> Unit,
+    onDelayParamChanged: (DelayParamId, Int) -> Unit,
+    onReadDelayParamClicked: (DelayParamId) -> Unit,
+    onReverbParamChanged: (ReverbParamId, Int) -> Unit,
+    onReadReverbParamClicked: (ReverbParamId) -> Unit,
+    reverbTime: Double?,
+    onReverbTimeChanged: (Double) -> Unit,
+    onReadReverbTimeClicked: () -> Unit,
+    modChorusPreDelayLow: Double?,
+    modChorusPreDelayHigh: Double?,
+    onModChorusPreDelayLowChanged: (Double) -> Unit,
+    onReadModChorusPreDelayLowClicked: () -> Unit,
+    onModChorusPreDelayHighChanged: (Double) -> Unit,
+    onReadModChorusPreDelayHighClicked: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -572,14 +770,14 @@ private fun EffectCard(
                 Switch(
                     checked = enabled == true,
                     onCheckedChange = { on -> onEnabledChanged(effect, on) },
-                    enabled = connected,
+                    enabled = canEdit,
                 )
             }
             ChipSelector(
                 label = stringResource(R.string.effect_color),
                 options = EffectColor.entries.map { it.value to it.displayLabel() },
                 selected = color,
-                enabled = connected,
+                enabled = canEdit,
                 onSelected = { value -> onColorChanged(effect, value) },
             )
             // El tipo va justo debajo del color porque son lo mismo visto de dos maneras: el
@@ -588,21 +786,58 @@ private fun EffectCard(
                 label = stringResource(R.string.effect_type),
                 options = effectTypeOptions(effect),
                 selected = type,
-                enabled = connected,
+                enabled = canEdit,
                 onSelected = { value -> onTypeChanged(effect, value) },
             )
-            LevelRow(effect.level, level, connected, onLevelChanged, onReadLevelClicked)
-            // Solo Booster tiene sus parámetros internos cableados por ahora (CLAUDE.md
-            // §5.2); el resto de efectos los tendrá cuando les toque (BACKLOG.md, bloque 2).
-            if (effect == EffectId.BOOST) {
-                BoosterInternalParams(
+            LevelRow(effect.level, level, canEdit, onLevelChanged, onReadLevelClicked)
+            // Booster, Delay y Reverb tienen sus parámetros internos cableados (CLAUDE.md
+            // §5.2, "DSP simple"); Mod y FX ("DSP complejo") los tendrán cuando les toque
+            // (BACKLOG.md, bloque 2).
+            when (effect) {
+                EffectId.BOOST -> BoosterInternalParams(
                     params = boosterParams,
                     soloEnabled = boosterSoloEnabled,
-                    connected = connected,
+                    canEdit = canEdit,
                     onParamChanged = onBoosterParamChanged,
                     onReadParam = onReadBoosterParamClicked,
                     onSoloEnabledChanged = onBoosterSoloEnabledChanged,
                 )
+
+                EffectId.DELAY -> DelayInternalParams(
+                    params = delayParams,
+                    highCut = selectors[SelectorId.DELAY_HIGH_CUT],
+                    canEdit = canEdit,
+                    onParamChanged = onDelayParamChanged,
+                    onReadParam = onReadDelayParamClicked,
+                    onHighCutChanged = { value -> onSelectorChanged(SelectorId.DELAY_HIGH_CUT, value) },
+                )
+
+                EffectId.REVERB -> ReverbInternalParams(
+                    params = reverbParams,
+                    time = reverbTime,
+                    lowCut = selectors[SelectorId.REVERB_LOW_CUT],
+                    highCut = selectors[SelectorId.REVERB_HIGH_CUT],
+                    canEdit = canEdit,
+                    onParamChanged = onReverbParamChanged,
+                    onReadParam = onReadReverbParamClicked,
+                    onTimeChanged = onReverbTimeChanged,
+                    onReadTime = onReadReverbTimeClicked,
+                    onLowCutChanged = { value -> onSelectorChanged(SelectorId.REVERB_LOW_CUT, value) },
+                    onHighCutChanged = { value -> onSelectorChanged(SelectorId.REVERB_HIGH_CUT, value) },
+                )
+
+                EffectId.MOD -> ModInternalParams(
+                    activeType = type,
+                    preDelayLow = modChorusPreDelayLow,
+                    preDelayHigh = modChorusPreDelayHigh,
+                    canEdit = canEdit,
+                    onPreDelayLowChanged = onModChorusPreDelayLowChanged,
+                    onReadPreDelayLow = onReadModChorusPreDelayLowClicked,
+                    onPreDelayHighChanged = onModChorusPreDelayHighChanged,
+                    onReadPreDelayHigh = onReadModChorusPreDelayHighClicked,
+                )
+
+                EffectId.FX -> Unit
             }
         }
     }
@@ -619,25 +854,25 @@ private fun EffectCard(
 private fun BoosterInternalParams(
     params: Map<BoosterParamId, Int?>,
     soloEnabled: Boolean?,
-    connected: Boolean,
+    canEdit: Boolean,
     onParamChanged: (BoosterParamId, Int) -> Unit,
     onReadParam: (BoosterParamId) -> Unit,
     onSoloEnabledChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        BoosterParamRow(BoosterParamId.DRIVE, params[BoosterParamId.DRIVE], connected, onParamChanged, onReadParam)
-        BoosterParamRow(BoosterParamId.BOTTOM, params[BoosterParamId.BOTTOM], connected, onParamChanged, onReadParam)
-        BoosterParamRow(BoosterParamId.TONE, params[BoosterParamId.TONE], connected, onParamChanged, onReadParam)
+        BoosterParamRow(BoosterParamId.DRIVE, params[BoosterParamId.DRIVE], canEdit, onParamChanged, onReadParam)
+        BoosterParamRow(BoosterParamId.BOTTOM, params[BoosterParamId.BOTTOM], canEdit, onParamChanged, onReadParam)
+        BoosterParamRow(BoosterParamId.TONE, params[BoosterParamId.TONE], canEdit, onParamChanged, onReadParam)
         SwitchRow(
             label = stringResource(R.string.booster_solo),
             checked = soloEnabled == true,
-            enabled = connected,
+            enabled = canEdit,
             onCheckedChange = onSoloEnabledChanged,
         )
-        BoosterParamRow(BoosterParamId.SOLO_LEVEL, params[BoosterParamId.SOLO_LEVEL], connected, onParamChanged, onReadParam)
-        BoosterParamRow(BoosterParamId.EFFECT_LEVEL, params[BoosterParamId.EFFECT_LEVEL], connected, onParamChanged, onReadParam)
-        BoosterParamRow(BoosterParamId.DIRECT_MIX, params[BoosterParamId.DIRECT_MIX], connected, onParamChanged, onReadParam)
+        BoosterParamRow(BoosterParamId.SOLO_LEVEL, params[BoosterParamId.SOLO_LEVEL], canEdit, onParamChanged, onReadParam)
+        BoosterParamRow(BoosterParamId.EFFECT_LEVEL, params[BoosterParamId.EFFECT_LEVEL], canEdit, onParamChanged, onReadParam)
+        BoosterParamRow(BoosterParamId.DIRECT_MIX, params[BoosterParamId.DIRECT_MIX], canEdit, onParamChanged, onReadParam)
     }
 }
 
@@ -645,7 +880,7 @@ private fun BoosterInternalParams(
 private fun BoosterParamRow(
     id: BoosterParamId,
     value: Int?,
-    connected: Boolean,
+    canEdit: Boolean,
     onParamChanged: (BoosterParamId, Int) -> Unit,
     onReadParam: (BoosterParamId) -> Unit,
 ) {
@@ -655,11 +890,193 @@ private fun BoosterParamRow(
             value?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
         ),
         level = value,
-        enabled = connected,
+        enabled = canEdit,
         onLevelChanged = { v -> onParamChanged(id, v) },
         onRead = { onReadParam(id) },
         valueRange = id.displayRange.first.toFloat()..id.displayRange.last.toFloat(),
     )
+}
+
+/**
+ * Delay 1's four internal continuous parameters plus its High Cut selector (CLAUDE.md §5.2).
+ *
+ * ⚠️ Implemented but unconfirmed against the amplifier — same visual weight as the rest of the
+ * card, same reasoning as [BoosterInternalParams].
+ */
+@Composable
+private fun DelayInternalParams(
+    params: Map<DelayParamId, Int?>,
+    highCut: Int?,
+    canEdit: Boolean,
+    onParamChanged: (DelayParamId, Int) -> Unit,
+    onReadParam: (DelayParamId) -> Unit,
+    onHighCutChanged: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        DelayParamRow(DelayParamId.TIME, params[DelayParamId.TIME], canEdit, onParamChanged, onReadParam)
+        DelayParamRow(DelayParamId.FEEDBACK, params[DelayParamId.FEEDBACK], canEdit, onParamChanged, onReadParam)
+        DropdownSelector(
+            label = stringResource(R.string.delay_high_cut),
+            options = DelayHighCutFrequency.entries.map { it.value to it.displayName },
+            selected = highCut,
+            enabled = canEdit,
+            onSelected = onHighCutChanged,
+        )
+        DelayParamRow(DelayParamId.EFFECT_LEVEL, params[DelayParamId.EFFECT_LEVEL], canEdit, onParamChanged, onReadParam)
+        DelayParamRow(DelayParamId.DIRECT_MIX, params[DelayParamId.DIRECT_MIX], canEdit, onParamChanged, onReadParam)
+    }
+}
+
+@Composable
+private fun DelayParamRow(
+    id: DelayParamId,
+    value: Int?,
+    canEdit: Boolean,
+    onParamChanged: (DelayParamId, Int) -> Unit,
+    onReadParam: (DelayParamId) -> Unit,
+) {
+    LevelControl(
+        label = stringResource(
+            id.labelRes,
+            value?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
+        ),
+        level = value,
+        enabled = canEdit,
+        onLevelChanged = { v -> onParamChanged(id, v) },
+        onRead = { onReadParam(id) },
+        valueRange = id.displayRange.first.toFloat()..id.displayRange.last.toFloat(),
+    )
+}
+
+/**
+ * Reverb's three internal continuous parameters plus its Low Cut and High Cut selectors
+ * (CLAUDE.md §5.2). Time and Effect Level are not here on purpose — see [ReverbParamId].
+ *
+ * ⚠️ Implemented but unconfirmed against the amplifier — same reasoning as
+ * [BoosterInternalParams].
+ */
+@Composable
+private fun ReverbInternalParams(
+    params: Map<ReverbParamId, Int?>,
+    time: Double?,
+    lowCut: Int?,
+    highCut: Int?,
+    canEdit: Boolean,
+    onParamChanged: (ReverbParamId, Int) -> Unit,
+    onReadParam: (ReverbParamId) -> Unit,
+    onTimeChanged: (Double) -> Unit,
+    onReadTime: () -> Unit,
+    onLowCutChanged: (Int) -> Unit,
+    onHighCutChanged: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        FractionalLevelControl(
+            label = stringResource(
+                R.string.reverb_time,
+                time?.let { "%.1f".format(it) } ?: stringResource(R.string.debug_connection_unknown_value),
+            ),
+            level = time,
+            enabled = canEdit,
+            onLevelChanged = onTimeChanged,
+            onRead = onReadTime,
+            valueRange = 0.1f..10.0f,
+        )
+        ReverbParamRow(ReverbParamId.PRE_DELAY, params[ReverbParamId.PRE_DELAY], canEdit, onParamChanged, onReadParam)
+        DropdownSelector(
+            label = stringResource(R.string.reverb_low_cut),
+            options = ReverbLowCutFrequency.entries.map { it.value to it.displayName },
+            selected = lowCut,
+            enabled = canEdit,
+            onSelected = onLowCutChanged,
+        )
+        DropdownSelector(
+            label = stringResource(R.string.reverb_high_cut),
+            options = ReverbHighCutFrequency.entries.map { it.value to it.displayName },
+            selected = highCut,
+            enabled = canEdit,
+            onSelected = onHighCutChanged,
+        )
+        ReverbParamRow(ReverbParamId.DENSITY, params[ReverbParamId.DENSITY], canEdit, onParamChanged, onReadParam)
+        ReverbParamRow(ReverbParamId.DIRECT_MIX, params[ReverbParamId.DIRECT_MIX], canEdit, onParamChanged, onReadParam)
+    }
+}
+
+@Composable
+private fun ReverbParamRow(
+    id: ReverbParamId,
+    value: Int?,
+    canEdit: Boolean,
+    onParamChanged: (ReverbParamId, Int) -> Unit,
+    onReadParam: (ReverbParamId) -> Unit,
+) {
+    LevelControl(
+        label = stringResource(
+            id.labelRes,
+            value?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
+        ),
+        level = value,
+        enabled = canEdit,
+        onLevelChanged = { v -> onParamChanged(id, v) },
+        onRead = { onReadParam(id) },
+        valueRange = id.displayRange.first.toFloat()..id.displayRange.last.toFloat(),
+    )
+}
+
+/**
+ * Mod's **only** internal parameter cabled so far: the Pre Delay of its 2x2 Chorus type
+ * (CLAUDE.md §5.2). Mod is "DSP complejo" — each type has its own address block — so unlike
+ * Booster/Delay/Reverb these two sliders **only mean what they say while Mod's active type is
+ * 2x2 Chorus**: with any other type active, the same two addresses hold that other type's own
+ * parameters. Showing the sliders anyway would silently mislabel them, so this hides them and
+ * explains why instead — same spirit as [EditModeNotice].
+ */
+@Composable
+private fun ModInternalParams(
+    activeType: Int?,
+    preDelayLow: Double?,
+    preDelayHigh: Double?,
+    canEdit: Boolean,
+    onPreDelayLowChanged: (Double) -> Unit,
+    onReadPreDelayLow: () -> Unit,
+    onPreDelayHighChanged: (Double) -> Unit,
+    onReadPreDelayHigh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (activeType != ModFxType.CHORUS.value) {
+        Text(
+            text = stringResource(R.string.mod_internal_params_requires_chorus),
+            modifier = modifier.fillMaxWidth().padding(top = 4.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    Column(modifier = modifier.fillMaxWidth()) {
+        FractionalLevelControl(
+            label = stringResource(
+                R.string.mod_chorus_pre_delay_low,
+                preDelayLow?.let { "%.1f".format(it) } ?: stringResource(R.string.debug_connection_unknown_value),
+            ),
+            level = preDelayLow,
+            enabled = canEdit,
+            onLevelChanged = onPreDelayLowChanged,
+            onRead = onReadPreDelayLow,
+            valueRange = 0.0f..40.0f,
+        )
+        FractionalLevelControl(
+            label = stringResource(
+                R.string.mod_chorus_pre_delay_high,
+                preDelayHigh?.let { "%.1f".format(it) } ?: stringResource(R.string.debug_connection_unknown_value),
+            ),
+            level = preDelayHigh,
+            enabled = canEdit,
+            onLevelChanged = onPreDelayHighChanged,
+            onRead = onReadPreDelayHigh,
+            valueRange = 0.0f..40.0f,
+        )
+    }
 }
 
 /**
@@ -841,6 +1258,46 @@ private fun LevelControl(
 }
 
 /**
+ * Same as [LevelControl] but for a [KatanaFractionalParameter][dev.alonx3.ktnacontrol.device.KatanaFractionalParameter]:
+ * the value shown and dragged is a `Double`, not an `Int` — CLAUDE.md §5.2, Reverb Time and
+ * Mod's 2x2 Chorus Pre Delay, the two parameters whose step needed
+ * [FractionalLevelScale][dev.alonx3.ktnacontrol.protocol.FractionalLevelScale].
+ *
+ * The slider itself still drags continuously in `Float`; quantising to the amp's actual 0.5/0.1
+ * step happens once, in `scale.toRaw`, same as every other control — the UI never rounds on its
+ * own.
+ */
+@Composable
+private fun FractionalLevelControl(
+    label: String,
+    level: Double?,
+    enabled: Boolean,
+    onLevelChanged: (Double) -> Unit,
+    onRead: () -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onRead, enabled = enabled) {
+                Text(stringResource(R.string.debug_connection_read_level))
+            }
+        }
+        Slider(
+            value = (level ?: 0.0).toFloat(),
+            onValueChange = { value -> onLevelChanged(value.toDouble()) },
+            valueRange = valueRange,
+            enabled = enabled && level != null,
+        )
+    }
+}
+
+/**
  * The console. Long-pressing anywhere on it copies the whole log, which beats retyping a
  * few hundred lines of hex by hand.
  */
@@ -930,6 +1387,12 @@ private fun DebugConnectionScreenPreview() {
                 SelectorId.AMP_TYPE to AmpType.MS_1959_I.value,
                 SelectorId.AMP_VARIATION to 0,
                 SelectorId.ACTIVE_CHANNEL to 1,
+                SelectorId.AMP_BRIGHT to 0,
+                SelectorId.AMP_GAIN_SW to 1,
+                SelectorId.AMP_SOLO to 0,
+                SelectorId.DELAY_HIGH_CUT to DelayHighCutFrequency.KHZ_2_00.value,
+                SelectorId.REVERB_LOW_CUT to ReverbLowCutFrequency.FLAT.value,
+                SelectorId.REVERB_HIGH_CUT to ReverbHighCutFrequency.KHZ_5_00.value,
             ),
             effectColors = EffectId.entries.associateWith { EffectColor.GREEN.value },
             effectEnabled = EffectId.entries.associateWith { true },
@@ -950,6 +1413,21 @@ private fun DebugConnectionScreenPreview() {
                 BoosterParamId.DIRECT_MIX to 20,
             ),
             boosterSoloEnabled = false,
+            ampSoloLevel = 30,
+            delayParams = mapOf(
+                DelayParamId.TIME to 350,
+                DelayParamId.FEEDBACK to 40,
+                DelayParamId.EFFECT_LEVEL to 90,
+                DelayParamId.DIRECT_MIX to 100,
+            ),
+            reverbParams = mapOf(
+                ReverbParamId.PRE_DELAY to 20,
+                ReverbParamId.DENSITY to 5,
+                ReverbParamId.DIRECT_MIX to 100,
+            ),
+            reverbTime = 2.5,
+            modChorusPreDelayLow = 12.0,
+            modChorusPreDelayHigh = 18.5,
             editMode = true,
             snackbarHostState = SnackbarHostState(),
             onScanClicked = {},
@@ -970,6 +1448,18 @@ private fun DebugConnectionScreenPreview() {
             onBoosterParamChanged = { _, _ -> },
             onReadBoosterParamClicked = {},
             onBoosterSoloEnabledChanged = {},
+            onAmpSoloLevelChanged = {},
+            onReadAmpSoloLevelClicked = {},
+            onDelayParamChanged = { _, _ -> },
+            onReadDelayParamClicked = {},
+            onReverbParamChanged = { _, _ -> },
+            onReadReverbParamClicked = {},
+            onReverbTimeChanged = {},
+            onReadReverbTimeClicked = {},
+            onModChorusPreDelayLowChanged = {},
+            onReadModChorusPreDelayLowClicked = {},
+            onModChorusPreDelayHighChanged = {},
+            onReadModChorusPreDelayHighClicked = {},
             onCopyLog = {},
         )
     }

@@ -48,6 +48,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -125,9 +127,8 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     /**
      * Tipo de efecto activo de cada uno de los cinco efectos, o null mientras no se sepa.
      *
-     * Solo Booster está confirmado con audio (2026-09-03); Mod, FX, Delay y Reverb están
-     * implementados pero pendientes de esa misma prueba — ver BACKLOG.md, "Pendiente por
-     * probar".
+     * ✅ Los cinco están confirmados con audio (Booster el 2026-09-03; Mod, FX, Delay y
+     * Reverb el 2026-09-04).
      */
     val effectTypes: StateFlow<Map<EffectId, Int?>> = _effectTypes.asStateFlow()
 
@@ -137,14 +138,68 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     /**
      * Booster's five internal continuous parameters, in **display** units (CLAUDE.md §5.2).
      *
-     * ⚠️ Implemented but unconfirmed against the amplifier (2026-09-04).
+     * ✅ Confirmed against the amplifier with audio (2026-09-04).
      */
     val boosterParams: StateFlow<Map<BoosterParamId, Int?>> = _boosterParams.asStateFlow()
 
     private val _boosterSoloEnabled = MutableStateFlow<Boolean?>(null)
 
-    /** ⚠️ Booster's Solo switch (`60 00 00 15`). Unconfirmed, same status as [boosterParams]. */
+    /** ✅ Booster's Solo switch (`60 00 00 15`). Confirmed with audio (2026-09-04). */
     val boosterSoloEnabled: StateFlow<Boolean?> = _boosterSoloEnabled.asStateFlow()
+
+    private val _delayParams =
+        MutableStateFlow(DelayParamId.entries.associateWith { null as Int? })
+
+    /**
+     * Delay 1's internal continuous parameters (Time, Feedback, Effect Level, Direct Mix), in
+     * **display** units. High Cut is not here: it is a frequency selector, part of
+     * [selectors]. ⚠️ Implemented but unconfirmed against the amplifier (CLAUDE.md §5.2).
+     */
+    val delayParams: StateFlow<Map<DelayParamId, Int?>> = _delayParams.asStateFlow()
+
+    private val _reverbParams =
+        MutableStateFlow(ReverbParamId.entries.associateWith { null as Int? })
+
+    /**
+     * Reverb's internal continuous parameters (Pre Delay, Density, Direct Mix), in **display**
+     * units. Low Cut and High Cut are frequency selectors, part of [selectors]; Time is its own
+     * `Double` state ([reverbTime]) and Effect Level is deliberately not implemented — see
+     * [ReverbParamId]. ⚠️ Implemented but unconfirmed against the amplifier (CLAUDE.md §5.2).
+     */
+    val reverbParams: StateFlow<Map<ReverbParamId, Int?>> = _reverbParams.asStateFlow()
+
+    private val _reverbTime = MutableStateFlow<Double?>(null)
+
+    /**
+     * ⚠️ Reverb Time, `60 00 05 42`, in display units `0.1..10.0` seconds. Unconfirmed
+     * (CLAUDE.md §5.2). Its own `Double?` instead of living in [reverbParams]: it needed
+     * [FractionalLevelScale][dev.alonx3.ktnacontrol.protocol.FractionalLevelScale], which the
+     * rest of that map's `Int` values do not.
+     */
+    val reverbTime: StateFlow<Double?> = _reverbTime.asStateFlow()
+
+    private val _modChorusPreDelayLow = MutableStateFlow<Double?>(null)
+    private val _modChorusPreDelayHigh = MutableStateFlow<Double?>(null)
+
+    /**
+     * ⚠️ Pre Delay of Mod's 2x2 Chorus type, `60 00 02 3A`, in display units `0.0..40.0` ms.
+     * Unconfirmed. **Only meaningful while Mod's active type is 2x2 Chorus** — see the KDoc of
+     * `KatanaAddresses.MOD_CHORUS_PRE_DELAY_LOW`; the UI hides the control otherwise instead of
+     * showing a slider that would silently mean something else.
+     */
+    val modChorusPreDelayLow: StateFlow<Double?> = _modChorusPreDelayLow.asStateFlow()
+
+    /** ⚠️ Same as [modChorusPreDelayLow], the High band (`60 00 02 3E`). */
+    val modChorusPreDelayHigh: StateFlow<Double?> = _modChorusPreDelayHigh.asStateFlow()
+
+    private val _ampSoloLevel = MutableStateFlow<Int?>(null)
+
+    /**
+     * ⚠️ Amp Solo Level, `60 00 00 2C`, in display units `0..100`. Unconfirmed — part of the
+     * PREAMP block that's still missing controls (BACKLOG.md, "Cambiar el tipo de
+     * amplificador no recarga nada").
+     */
+    val ampSoloLevel: StateFlow<Int?> = _ampSoloLevel.asStateFlow()
 
     private val _editMode = MutableStateFlow(false)
 
@@ -158,8 +213,46 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
 
     private var repositoryMirror: Job? = null
 
-    /** Vigila el canal activo para releer el estado cuando cambia. */
-    private var channelWatch: Job? = null
+    /**
+     * Único disparador de recarga: la conexión inicial y cada cambio de canal detectado
+     * emiten aquí, en vez de lanzar cada uno su propio `loadFromDump()` por su lado.
+     *
+     * Antes había dos caminos independientes —un `launch` suelto para la conexión y un
+     * `collectLatest` aparte para el canal— y podían pisarse: se midieron **dos dumps
+     * simultáneos** en JVM (BACKLOG.md, "El estado se desincroniza al cambiar de canal
+     * rápido"). Con un solo `StateFlow` y un solo `collectLatest`, una recarga en vuelo
+     * siempre cancela a la anterior, así que solo puede haber una a la vez — el [reloadMutex]
+     * de abajo es la red de seguridad, no el mecanismo principal.
+     */
+    private var reloadRequests: MutableStateFlow<ReloadRequest>? = null
+
+    /** El `collectLatest` de [reloadRequests], más el `collect` que alimenta sus cambios de canal. */
+    private var reloadJob: Job? = null
+
+    /**
+     * Impide que dos `loadFromDump()` corran a la vez aunque algo (un tercer disparador
+     * futuro, un error de diseño) se cuele por fuera de [reloadRequests]. Con un solo dueño
+     * de la recarga no debería hacer falta nunca, pero es la garantía de que la invariante
+     * se cumple pase lo que pase — antes de esto **no existía ningún guard de concurrencia
+     * en el proyecto**.
+     */
+    private val reloadMutex = Mutex()
+
+    /**
+     * Qué pidió la última recarga: la apertura de la conexión, o un cambio de canal — y en
+     * este segundo caso, a cuál.
+     */
+    private sealed interface ReloadRequest {
+        val reason: String
+
+        object Connection : ReloadRequest {
+            override val reason: String = "la conexión"
+        }
+
+        data class ChannelChanged(val channel: Int) : ReloadRequest {
+            override val reason: String = "el cambio de canal"
+        }
+    }
 
     /**
      * Canal para el que vale el estado que hay cargado ahora mismo.
@@ -168,6 +261,12 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
      * caso típico es el GET de respaldo del propio dump, que lo vuelve a leer.
      */
     private var loadedChannel: Int? = null
+
+    /**
+     * Último canal que pidió la app, hasta que una recarga confirme si el amplificador lo
+     * aceptó. Ver [reportIgnoredChannelWrite].
+     */
+    private var requestedChannel: Int? = null
 
     /** Adapts the USB transport to the narrow port the repository depends on. */
     private inner class TransportLink(
@@ -646,6 +745,46 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                     _boosterSoloEnabled.value = value?.let { it == KatanaAddresses.SWITCH_ON }
                 }
             }
+            launch {
+                newRepository.ampSoloLevel.state.collect { raw ->
+                    _ampSoloLevel.value = raw?.let(KatanaAddresses.PANEL_LEVEL_SCALE::toDisplay)
+                }
+            }
+            DelayParamId.entries.forEach { id ->
+                launch {
+                    val parameter = delayParamIn(newRepository, id)
+                    parameter.state.collect { raw ->
+                        val shown = raw?.let(parameter.scale::toDisplay)
+                        _delayParams.update { current -> current + (id to shown) }
+                    }
+                }
+            }
+            ReverbParamId.entries.forEach { id ->
+                launch {
+                    val parameter = reverbParamIn(newRepository, id)
+                    parameter.state.collect { raw ->
+                        val shown = raw?.let(parameter.scale::toDisplay)
+                        _reverbParams.update { current -> current + (id to shown) }
+                    }
+                }
+            }
+            launch {
+                newRepository.reverbTime.state.collect { raw ->
+                    _reverbTime.value = raw?.let(newRepository.reverbTime.scale::toDisplay)
+                }
+            }
+            launch {
+                newRepository.modChorusPreDelayLow.state.collect { raw ->
+                    _modChorusPreDelayLow.value =
+                        raw?.let(newRepository.modChorusPreDelayLow.scale::toDisplay)
+                }
+            }
+            launch {
+                newRepository.modChorusPreDelayHigh.state.collect { raw ->
+                    _modChorusPreDelayHigh.value =
+                        raw?.let(newRepository.modChorusPreDelayHigh.scale::toDisplay)
+                }
+            }
             EffectId.entries.forEach { effect ->
                 launch {
                     colorIn(newRepository, effect).state.collect { value ->
@@ -664,40 +803,64 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         // **Una** petición en vez de 24 GET en serie: el amplificador contesta el dump con
         // varios mensajes de golpe y todas las direcciones que la app controla viven dentro
         // de `60 00 00 00`. Lo que el dump no cubra se recupera con su GET individual.
-        viewModelScope.launch {
-            appendLog("→ Poblando el estado desde el dump de memoria...")
-            reload(newRepository, "la conexión")
-        }
-        watchChannelChanges(newRepository)
+        startReloadCoordinator(newRepository)
     }
 
     /**
-     * Relee **todo** el estado cada vez que cambia el canal activo.
+     * Único punto de disparo de recargas: la conexión inicial y cada cambio de canal activo
+     * pasan por aquí, nunca por su cuenta.
      *
      * Cada canal (1A–4A, 1B–4B, PANEL) tiene sus propios valores: niveles, modelo de
-     * amplificador, colores, on/off y tipos de efecto son todos distintos. Sin esto la app
-     * seguiría mostrando los del canal anterior, que es peor que no mostrar nada — parecería
-     * que el amplificador dice una cosa cuando dice otra.
+     * amplificador, colores, on/off y tipos de efecto son todos distintos. Sin releer al
+     * cambiar de canal la app seguiría mostrando los del canal anterior, que es peor que no
+     * mostrar nada — parecería que el amplificador dice una cosa cuando dice otra.
+     *
+     * ⚠️ **Antes esto eran dos caminos separados** —un `launch` suelto para la conexión y un
+     * `collectLatest` aparte observando el canal— **y se medían dos dumps simultáneos**
+     * (BACKLOG.md, "El estado se desincroniza al cambiar de canal rápido"). Ahora los dos
+     * disparadores emiten al mismo [ReloadRequest] conflado, así que solo hay un
+     * `collectLatest` y por tanto una sola recarga en vuelo en todo momento — el
+     * [reloadMutex] de [reload] es la red de seguridad, no lo que hace el trabajo.
      *
      * Detalles que hacen que esto no se muerda la cola:
      *  - **Da igual quién cambió el canal.** Se observa el estado del control, así que entra
      *    tanto el cambio hecho desde la app como el del footswitch físico.
      *  - **No hay bucle**: el canal vive en `00 01 00 00`, fuera del dump, así que recargar no
      *    lo reescribe. El GET de respaldo lo relee, pero un `StateFlow` no reemite un valor
-     *    igual, así que ahí se para.
+     *    igual, así que ahí se para. Y ahora que el dump filtra por [blockReplyIn][dev.alonx3.ktnacontrol.protocol.blockReplyIn]
+     *    (CLAUDE.md §4.4), un reporte de canal que llegue mientras el dump está en vuelo ya
+     *    no puede colarse como si fuera un trozo de memoria.
      *  - **`collectLatest` + un margen** cancelan la recarga en vuelo si el canal vuelve a
      *    cambiar: pasar 1A→2A→3A rápido hace **una** recarga, la del canal donde te quedaste.
      *    El margen además le da tiempo al amplificador a cambiar de canal de verdad antes de
      *    preguntarle en qué estado quedó.
+     *  - **El guard se vuelve a comprobar después del margen, no solo antes.** Antes solo se
+     *    miraba antes de esperar; ahora también al final, que es donde de verdad importa que
+     *    la condición siga siendo cierta.
      */
-    private fun watchChannelChanges(repository: KatanaRepository) {
-        channelWatch?.cancel()
-        channelWatch = viewModelScope.launch {
-            repository.channel.state.filterNotNull().collectLatest { channel ->
-                if (channel == loadedChannel) return@collectLatest
-                delay(CHANNEL_RELOAD_SETTLE_MS)
-                appendLog("↻ Canal ${describeChannel(channel)}: releyendo todo el estado...")
-                reload(repository, "el cambio de canal")
+    private fun startReloadCoordinator(repository: KatanaRepository) {
+        reloadJob?.cancel()
+        val requests = MutableStateFlow<ReloadRequest>(ReloadRequest.Connection)
+        reloadRequests = requests
+        reloadJob = viewModelScope.launch {
+            launch {
+                repository.channel.state.filterNotNull().collect { channel ->
+                    requests.value = ReloadRequest.ChannelChanged(channel)
+                }
+            }
+            requests.collectLatest { request ->
+                val channelRequest = request as? ReloadRequest.ChannelChanged
+                if (channelRequest != null) {
+                    if (channelRequest.channel == loadedChannel) return@collectLatest
+                    delay(CHANNEL_RELOAD_SETTLE_MS)
+                    if (channelRequest.channel == loadedChannel) return@collectLatest
+                    appendLog(
+                        "↻ Canal ${describeChannel(channelRequest.channel)}: releyendo todo el estado..."
+                    )
+                } else {
+                    appendLog("→ Poblando el estado desde el dump de memoria...")
+                }
+                reloadMutex.withLock { reload(repository, request.reason) }
             }
         }
     }
@@ -710,6 +873,33 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         if (load.messages == 0) {
             appendLog("  ! Tras $reason el dump no contestó; el estado puede estar viejo.")
         }
+        reportIgnoredChannelWrite()
+    }
+
+    /**
+     * Avisa cuando el amplificador **no aceptó** un cambio de canal que pidió la app.
+     *
+     * El síntoma sin esto es desconcertante: el selector se mueve y vuelve solo un momento
+     * después, sin que el log diga por qué. Y no es un fallo de la app — es la app
+     * funcionando bien: la escritura es optimista, el amplificador la ignora, y la relectura
+     * del canal (`00 01 00 00`, que vive fuera del dump y siempre cae al GET de respaldo)
+     * trae el valor real y lo pisa. Es exactamente la misma firma que delató que
+     * `60 00 06 5C` era de solo lectura (CLAUDE.md §5).
+     *
+     * Se menciona Edit Mode porque es la causa observada (BACKLOG.md, "Pendiente por
+     * probar"), pero el aviso se da igual con Edit Mode encendido: si la escritura no cuaja
+     * con edit mode activo, eso es otra cosa y también hay que verla.
+     */
+    private fun reportIgnoredChannelWrite() {
+        val requested = requestedChannel ?: return
+        requestedChannel = null
+        val actual = loadedChannel ?: return
+        if (actual == requested) return
+        appendLog(
+            "  ! Se pidió el canal ${describeChannel(requested)} pero el amplificador sigue " +
+                "en ${describeChannel(actual)}." +
+                if (!_editMode.value) " Edit Mode está apagado." else ""
+        )
     }
 
     private fun describeChannel(value: Int): String = when (value) {
@@ -733,6 +923,13 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                 ", ${load.fromFallbackGet} con GET de respaldo" +
                 if (load.stillUnknown > 0) ", ${load.stillUnknown} sin conocer" else ""
         )
+        if (load.rejectedDuringWindow.isNotEmpty()) {
+            val total = load.rejectedDuringWindow.values.sum()
+            val summary = load.rejectedDuringWindow.entries.joinToString(", ") { (address, count) ->
+                if (count > 1) "$address ×$count" else "$address"
+            }
+            appendLog("  $total reporte(s) ignorado(s) durante la ventana: $summary")
+        }
         appendLog("  ${load.state.summary()}")
     }
 
@@ -742,6 +939,12 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
             SelectorId.AMP_TYPE -> repository.ampType
             SelectorId.AMP_VARIATION -> repository.ampVariation
             SelectorId.ACTIVE_CHANNEL -> repository.channel
+            SelectorId.AMP_BRIGHT -> repository.ampBright
+            SelectorId.AMP_GAIN_SW -> repository.ampGainSw
+            SelectorId.AMP_SOLO -> repository.ampSoloEnabled
+            SelectorId.DELAY_HIGH_CUT -> repository.delayHighCut
+            SelectorId.REVERB_LOW_CUT -> repository.reverbLowCut
+            SelectorId.REVERB_HIGH_CUT -> repository.reverbHighCut
         }
 
     private fun colorIn(repository: KatanaRepository, effect: EffectId): KatanaEnumParameter =
@@ -808,9 +1011,17 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         parameterIn(active, id).setLevel(value)
     }
 
-    /** Picks an amp category or model. ✅ Ambas direcciones confirmadas. */
+    /**
+     * Picks an amp category or model, or the active channel. ✅ Ambas direcciones confirmadas.
+     *
+     * **El SET sale siempre, sin mirar Edit Mode** — no hay ni ha habido nunca un gate de edit
+     * mode en el camino de escritura (`device/` y `protocol/` no saben qué es el edit mode).
+     * Lo que decide qué se puede tocar es la UI, que deshabilita los parámetros con edit mode
+     * apagado y deja el canal siempre disponible. Ver el contrato en CLAUDE.md §4.2.
+     */
     fun onSelectorChanged(id: SelectorId, value: Int) {
         val active = repository ?: return
+        if (id == SelectorId.ACTIVE_CHANNEL) requestedChannel = value
         selectorIn(active, id).set(value)
     }
 
@@ -950,11 +1161,160 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
-    /** Turns Booster's Solo mode on or off (`60 00 00 15`). ⚠️ Sin confirmar. */
+    /** Turns Booster's Solo mode on or off (`60 00 00 15`). ✅ Confirmado con audio. */
     fun onBoosterSoloEnabledChanged(enabled: Boolean) {
         val active = repository ?: return
         val value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF
         active.boostSoloEnabled.set(value)
+    }
+
+    /** Moves the amp's Solo Level (`60 00 00 2C`), in what the UI shows. ⚠️ Sin confirmar. */
+    fun onAmpSoloLevelChanged(value: Int) {
+        val active = repository ?: return
+        active.ampSoloLevel.setLevel(value)
+    }
+
+    /** GET half of the audio test for the amp's Solo Level (CLAUDE.md §5). */
+    fun onReadAmpSoloLevelClicked() {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = active.ampSoloLevel
+        viewModelScope.launch {
+            appendLog("→ GET amp solo level (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de amp solo level."
+            )
+        }
+    }
+
+    // --- Parámetros internos fijos de Delay 1 y Reverb (CLAUDE.md §5.2) --------------------
+    //
+    // ⚠️ Implementados, pendientes de confirmar con audio. High Cut (Delay y Reverb) y Low Cut
+    // (Reverb) no están aquí: son selectores de frecuencia, van por `selectorIn`/`onSelectorChanged`.
+
+    private fun delayParamIn(repository: KatanaRepository, id: DelayParamId): KatanaParameter =
+        when (id) {
+            DelayParamId.TIME -> repository.delayTime
+            DelayParamId.FEEDBACK -> repository.delayFeedback
+            DelayParamId.EFFECT_LEVEL -> repository.delayEffectLevel
+            DelayParamId.DIRECT_MIX -> repository.delayDirectMix
+        }
+
+    /** Moves one of Delay 1's internal parameters, in what the UI shows. Optimistic, debounced. */
+    fun onDelayParamChanged(id: DelayParamId, value: Int) {
+        val active = repository ?: return
+        delayParamIn(active, id).setLevel(value)
+    }
+
+    /** GET half of the audio test for one Delay 1 parameter (CLAUDE.md §5). */
+    fun onReadDelayParamClicked(id: DelayParamId) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = delayParamIn(active, id)
+        viewModelScope.launch {
+            appendLog("→ GET delay ${id.logName} (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de delay ${id.logName}."
+            )
+        }
+    }
+
+    private fun reverbParamIn(repository: KatanaRepository, id: ReverbParamId): KatanaParameter =
+        when (id) {
+            ReverbParamId.PRE_DELAY -> repository.reverbPreDelay
+            ReverbParamId.DENSITY -> repository.reverbDensity
+            ReverbParamId.DIRECT_MIX -> repository.reverbDirectMix
+        }
+
+    /** Moves one of Reverb's internal parameters, in what the UI shows. Optimistic, debounced. */
+    fun onReverbParamChanged(id: ReverbParamId, value: Int) {
+        val active = repository ?: return
+        reverbParamIn(active, id).setLevel(value)
+    }
+
+    /** GET half of the audio test for one Reverb parameter (CLAUDE.md §5). */
+    fun onReadReverbParamClicked(id: ReverbParamId) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = reverbParamIn(active, id)
+        viewModelScope.launch {
+            appendLog("→ GET reverb ${id.logName} (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de reverb ${id.logName}."
+            )
+        }
+    }
+
+    // --- Parámetros con paso fraccionario (CLAUDE.md §5.2) ---------------------------------
+    //
+    // ⚠️ Implementados, pendientes de confirmar con audio. `setLevel`/`read` trabajan en
+    // `Double`, no en `Int` — la diferencia de KatanaFractionalParameter frente al resto.
+
+    /** Moves Reverb Time (`60 00 05 42`), in display seconds. Optimistic, debounced. */
+    fun onReverbTimeChanged(value: Double) {
+        val active = repository ?: return
+        active.reverbTime.setLevel(value)
+    }
+
+    /** GET half of the audio test for Reverb Time (CLAUDE.md §5). */
+    fun onReadReverbTimeClicked() {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = active.reverbTime
+        viewModelScope.launch {
+            appendLog("→ GET reverb time (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de reverb time."
+            )
+        }
+    }
+
+    /**
+     * Moves the Low band of Mod's 2x2 Chorus Pre Delay (`60 00 02 3A`), in display ms.
+     * Optimistic, debounced. Only meaningful while Mod's active type is 2x2 Chorus — see
+     * `KatanaAddresses.MOD_CHORUS_PRE_DELAY_LOW`.
+     */
+    fun onModChorusPreDelayLowChanged(value: Double) {
+        val active = repository ?: return
+        active.modChorusPreDelayLow.setLevel(value)
+    }
+
+    /** GET half of the audio test for the Low band (CLAUDE.md §5). */
+    fun onReadModChorusPreDelayLowClicked() {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = active.modChorusPreDelayLow
+        viewModelScope.launch {
+            appendLog("→ GET mod chorus pre delay low (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de mod chorus pre delay low."
+            )
+        }
+    }
+
+    /** Same as [onModChorusPreDelayLowChanged], the High band (`60 00 02 3E`). */
+    fun onModChorusPreDelayHighChanged(value: Double) {
+        val active = repository ?: return
+        active.modChorusPreDelayHigh.setLevel(value)
+    }
+
+    /** GET half of the audio test for the High band (CLAUDE.md §5). */
+    fun onReadModChorusPreDelayHighClicked() {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = active.modChorusPreDelayHigh
+        viewModelScope.launch {
+            appendLog("→ GET mod chorus pre delay high (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de mod chorus pre delay high."
+            )
+        }
     }
 
     /** Turns one effect on or off. ✅ Confirmado, incluido `00` = off / `01` = on. */
@@ -970,9 +1330,11 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         readJob = null
         repositoryMirror?.cancel()
         repositoryMirror = null
-        channelWatch?.cancel()
-        channelWatch = null
+        reloadJob?.cancel()
+        reloadJob = null
+        reloadRequests = null
         loadedChannel = null
+        requestedChannel = null
         repository?.close()
         repository = null
         _levels.value = LevelId.entries.associateWith { null }
@@ -982,6 +1344,12 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         _effectTypes.value = EffectId.entries.associateWith { null }
         _boosterParams.value = BoosterParamId.entries.associateWith { null }
         _boosterSoloEnabled.value = null
+        _ampSoloLevel.value = null
+        _delayParams.value = DelayParamId.entries.associateWith { null }
+        _reverbParams.value = ReverbParamId.entries.associateWith { null }
+        _reverbTime.value = null
+        _modChorusPreDelayLow.value = null
+        _modChorusPreDelayHigh.value = null
         _editMode.value = false
         transport?.close()
         transport = null

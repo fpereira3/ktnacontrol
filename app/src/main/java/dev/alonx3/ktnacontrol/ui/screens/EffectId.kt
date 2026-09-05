@@ -29,21 +29,40 @@ enum class EffectId(
 /**
  * The selectors that are not levels, keyed the way [LevelId] keys the continuous ones.
  *
- * ⚠️ **Every one of these is unconfirmed against the amplifier** (2026-09-03). See the KDoc
- * of each address in `KatanaAddresses`.
+ * Confirmation status varies per entry now — see the KDoc of each address in
+ * `KatanaAddresses` for the current word. [AMP_CATEGORY], [AMP_TYPE], [AMP_VARIATION] and
+ * [ACTIVE_CHANNEL] are confirmed with audio; the three PREAMP additions below are not yet.
  */
 enum class SelectorId(val logName: String) {
-    /** Amp category, five positions of the physical knob (`60 00 06 50`). */
+    /** ✅ Amp category, five positions of the physical knob (`60 00 06 50`). */
     AMP_CATEGORY("amp category"),
 
-    /** Full amp model, 30 options (`60 00 00 21`). */
+    /** ✅ Full amp model, 30 options (`60 00 00 21`). */
     AMP_TYPE("amp type"),
 
-    /** Variation LED (`60 00 06 5C`). */
+    /** ✅ Variation LED (`60 00 06 5C`), confirmed read-only — see `KatanaAddresses`. */
     AMP_VARIATION("amp variation"),
 
-    /** Active channel/preset, 9 values (`00 01 00 00`). See CLAUDE.md §5.1. */
+    /** ✅ Active channel/preset, 9 values (`00 01 00 00`). See CLAUDE.md §5.1. */
     ACTIVE_CHANNEL("active channel"),
+
+    /** ⚠️ Bright on/off, part of the PREAMP block (`60 00 00 29`). Unconfirmed. */
+    AMP_BRIGHT("amp bright"),
+
+    /** ⚠️ Gain SW, three positions (`60 00 00 2A`): Low/Middle/High. Unconfirmed. */
+    AMP_GAIN_SW("amp gain sw"),
+
+    /** ⚠️ Solo on/off, part of the PREAMP block (`60 00 00 2B`). Unconfirmed. */
+    AMP_SOLO("amp solo"),
+
+    /** ⚠️ High Cut of Delay 1's internal block (`60 00 05 05`). Unconfirmed. */
+    DELAY_HIGH_CUT("delay high cut"),
+
+    /** ⚠️ Low Cut of Reverb's internal block (`60 00 05 45`). Unconfirmed. */
+    REVERB_LOW_CUT("reverb low cut"),
+
+    /** ⚠️ High Cut of Reverb's internal block (`60 00 05 46`). Unconfirmed. */
+    REVERB_HIGH_CUT("reverb high cut"),
 }
 
 /**
@@ -71,4 +90,47 @@ enum class BoosterParamId(
     SOLO_LEVEL(R.string.booster_solo_level, 0..100, "solo level"),
     EFFECT_LEVEL(R.string.booster_effect_level, 0..100, "effect level"),
     DIRECT_MIX(R.string.booster_direct_mix_level, 0..100, "direct mix"),
+}
+
+/**
+ * Delay 1's four internal continuous parameters, beyond its panel-knob level ([LevelId.DELAY])
+ * and its type. Its High Cut is a frequency selector, not a level, so it is not here — see
+ * [SelectorId.DELAY_HIGH_CUT]. See CLAUDE.md §5.2.
+ *
+ * ⚠️ **Implemented but unconfirmed against the amplifier.** Its Time is `1..2000` display units
+ * but the raw byte occupies **2 bytes**, same shape as the active channel; the UI does not
+ * need to know that, it just gets a wider range than every other level.
+ */
+enum class DelayParamId(
+    @param:StringRes val labelRes: Int,
+    val displayRange: IntRange,
+    val logName: String,
+) {
+    TIME(R.string.delay_time, 1..2000, "time"),
+    FEEDBACK(R.string.delay_feedback, 0..100, "feedback"),
+    EFFECT_LEVEL(R.string.delay_effect_level, 0..120, "effect level"),
+    DIRECT_MIX(R.string.delay_direct_mix, 0..100, "direct mix"),
+}
+
+/**
+ * Reverb's three internal continuous parameters, beyond its panel-knob level
+ * ([LevelId.REVERB]) and its type. Its Low Cut and High Cut are frequency selectors, not
+ * levels — see [SelectorId.REVERB_LOW_CUT] / [SelectorId.REVERB_HIGH_CUT]. See CLAUDE.md §5.2.
+ *
+ * Reverb Time (`60 00 05 42`) and Effect Level (`60 00 05 48`) are **not** here on purpose:
+ * Time has a non-standard 0.1s-per-step scale [LevelScale][dev.alonx3.ktnacontrol.protocol.LevelScale]
+ * cannot express yet, and Effect Level is the address already proven dead as
+ * `REVERB_LEVEL_DERIVED` — see both KDocs in `KatanaAddresses`.
+ *
+ * ⚠️ **Implemented but unconfirmed against the amplifier.** Pre Delay's raw byte occupies 2
+ * bytes, same as [DelayParamId.TIME].
+ */
+enum class ReverbParamId(
+    @param:StringRes val labelRes: Int,
+    val displayRange: IntRange,
+    val logName: String,
+) {
+    PRE_DELAY(R.string.reverb_pre_delay, 0..500, "pre delay"),
+    DENSITY(R.string.reverb_density, 0..10, "density"),
+    DIRECT_MIX(R.string.reverb_direct_mix, 0..100, "direct mix"),
 }

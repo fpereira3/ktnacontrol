@@ -1,7 +1,9 @@
 package dev.alonx3.ktnacontrol.device
 
 import dev.alonx3.ktnacontrol.protocol.Address
+import dev.alonx3.ktnacontrol.protocol.FractionalLevelScale
 import dev.alonx3.ktnacontrol.protocol.LevelScale
+import dev.alonx3.ktnacontrol.protocol.MemoryDump
 import dev.alonx3.ktnacontrol.protocol.MidiBytes
 import dev.alonx3.ktnacontrol.protocol.RolandMessage
 import dev.alonx3.ktnacontrol.protocol.RolandSysEx
@@ -138,15 +140,25 @@ sealed class KatanaControl(
     }
 
     /**
-     * Applies a value read out of a memory dump.
+     * Applies the value this control holds inside a memory dump, respecting [byteWidth].
+     *
+     * ⚠️ **Used to take a single already-looked-up byte, which silently truncated every
+     * multi-byte control to its high byte** — for the active channel (the only 2-byte
+     * control today, CLAUDE.md §5.1) that turned channels 1..8 into `0` = Panel whenever a
+     * stray reply let it reach the dump path (BACKLOG.md, "El estado se desincroniza al
+     * cambiar de canal rápido"). Reading all of [byteWidth]'s bytes here, instead of the
+     * caller handing over one, is what fixes that for good and for any future multi-byte
+     * control (Pitch Shifter / Harmonist's `Pre Delay`, CLAUDE.md §5.2).
      *
      * Same rules as [applyIncoming] —**never sends**, rejects what this control does not
      * accept— but without the address check, because the caller already looked the address up.
      *
-     * @return true if the value was taken, false if this control rejects it.
+     * @return true if the value was taken, false if the dump does not cover every byte of
+     *   this control's address, or if this control rejects the decoded value.
      */
-    internal fun applyDumpValue(raw: Int): Boolean {
-        val accepted = coerce(raw) ?: return false
+    internal fun applyDumpValue(dump: MemoryDump): Boolean {
+        val bytes = dump.bytesAt(address, byteWidth) ?: return false
+        val accepted = coerce(MidiBytes.decode(bytes)) ?: return false
         _state.value = accepted
         return true
     }
@@ -178,7 +190,13 @@ class KatanaParameter internal constructor(
     scope: CoroutineScope,
     override val debounceMillis: Long,
     onDiagnostic: (String) -> Unit,
-) : KatanaControl(address, link, scope, onDiagnostic) {
+    /**
+     * Bytes of data at [address]. `1` for every level except Delay Time and Reverb Pre Delay
+     * (CLAUDE.md §5.2), which — like the active channel (`byteWidth` on
+     * [KatanaEnumParameter]) — need 2 to reach their documented millisecond range.
+     */
+    byteWidth: Int = 1,
+) : KatanaControl(address, link, scope, onDiagnostic, byteWidth) {
 
     /**
      * What the UI shows right now, or null until the value is known.
@@ -202,6 +220,37 @@ class KatanaParameter internal constructor(
      */
     override fun coerce(value: Int): Int =
         if (value == scale.offRawValue) value else value.coerceIn(scale.rawRange)
+}
+
+/**
+ * A continuous level whose displayed value moves in a **fractional** step — 0.5 ms, 0.1 s —
+ * that [KatanaParameter]'s `Int`-based [LevelScale] cannot represent. See
+ * [dev.alonx3.ktnacontrol.protocol.FractionalLevelScale] for why this is a separate class
+ * instead of widening [KatanaParameter] itself: everything else in this project shows a plain
+ * `Int`, and this is the minority case.
+ *
+ * Same two-faces shape as [KatanaParameter] — [state] / [set] in raw bytes, [displayValue] /
+ * [setLevel] in what the UI shows — just with `Double` on the display side. Never rejects: like
+ * every continuous level, an out-of-range value clamps instead.
+ */
+class KatanaFractionalParameter internal constructor(
+    address: Address,
+    /** How this level's raw byte maps to the fractional number shown. */
+    val scale: FractionalLevelScale,
+    link: KatanaLink,
+    scope: CoroutineScope,
+    override val debounceMillis: Long,
+    onDiagnostic: (String) -> Unit,
+) : KatanaControl(address, link, scope, onDiagnostic) {
+
+    /** What the UI shows right now, or null until the value is known. Same reasoning as [KatanaParameter.displayValue]. */
+    val displayValue: Double?
+        get() = state.value?.let(scale::toDisplay)
+
+    /** Sets the level from what the UI shows; the raw byte is derived through [scale]. */
+    fun setLevel(display: Double) = set(scale.toRaw(display))
+
+    override fun coerce(value: Int): Int = value.coerceIn(scale.rawRange)
 }
 
 /**

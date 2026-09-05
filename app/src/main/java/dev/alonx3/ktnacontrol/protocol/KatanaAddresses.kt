@@ -140,6 +140,17 @@ object KatanaAddresses {
      *
      * Lección: que una fuente de Mk2 liste una dirección bajo `SEND` **no basta**; hay que
      * probarla con audio real.
+     *
+     * ✅ **Identificada, con la extracción de los parámetros internos de Reverb (CLAUDE.md
+     * §5.2): es el "Effect Level" del bloque interno de Reverb** —
+     * `midi.xml:42928`, `<DATA value="48" desc="REV:" customdesc="Effect">`, entre
+     * [REVERB_DENSITY] (`47`) y [REVERB_DIRECT_MIX] (`49`)—, no una dirección sin identificar.
+     * Esto explica por qué "escribir ahí no hace nada" para el volumen del efecto: no es que
+     * la dirección esté muerta, es que **no es la perilla del panel**, es un parámetro interno
+     * de la reverb en sí — el "derivado y retardado" que se observaba era, con esta lectura,
+     * probablemente el nivel interno tras aplicarle el propio efecto. No se reintroduce como
+     * control nuevo: sigue sin haber prueba de que aceptar escritura aquí cambie el sonido, así
+     * que se queda documentada, no cableada, hasta que el audio diga lo contrario.
      */
     @Deprecated(
         message = "Valor derivado, no un punto de control: escribir ahí no tiene efecto.",
@@ -317,6 +328,51 @@ object KatanaAddresses {
      * acepta escritura: ver [AmpCategory.typeValue].
      */
     val AMP_TYPE_FULL = Address(0x60, 0x00, 0x00, 0x21)
+
+    /**
+     * **Bright, `60 00 00 29`.** On/off: usa [SWITCH_VALUES].
+     *
+     * ⚠️ Implementado, sin confirmar (ver BACKLOG.md, "Pendiente por probar"). Sale del
+     * bloque PREAMP (`60 00 00 21`–`2C`): `midi.xml:37483` la nombra `PREAMP: Bright`, con
+     * `00` Off / `01` On. Es la única fuente — ninguna otra documenta este bloque para el
+     * Mk2 (ver BACKLOG.md, "Cambiar el tipo de amplificador no recarga nada").
+     *
+     * Ya viene en el dump: `60 00 00 2x` cae de lleno en `60 00 00 00` + 1920 B, así que no
+     * hace falta ampliar ningún rango de GET para leerlo — solo faltaba registrar el control.
+     */
+    val AMP_BRIGHT = Address(0x60, 0x00, 0x00, 0x29)
+
+    /**
+     * **Gain SW, `60 00 00 2A`.** Tres posiciones: usa [GAIN_SW_VALUES].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:37487` la nombra `PREAMP: Gain SW` con tres
+     * valores literales `Low` / `Middle` / `High` (`00`/`01`/`02`) — probablemente el rango
+     * de la perilla GAIN, a la manera de un selector de "gama" del preamp, pero ninguna
+     * fuente lo explica más allá del nombre; la prueba de audio tendrá que decir qué cambia
+     * exactamente. Ver BACKLOG.md, "Pendiente por probar".
+     */
+    val AMP_GAIN_SW = Address(0x60, 0x00, 0x00, 0x2A)
+
+    /** Los tres valores de [AMP_GAIN_SW]: `00` Low, `01` Middle, `02` High. */
+    val GAIN_SW_VALUES: List<Int> = listOf(0x00, 0x01, 0x02)
+
+    /**
+     * **Solo Sw del amplificador, `60 00 00 2B`.** On/off: usa [SWITCH_VALUES].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:37492` la nombra `PREAMP: Solo Sw`. Mismo
+     * concepto que [BOOST_SOLO_ENABLED] pero a nivel de preamp en vez de Booster, y ese ya
+     * está confirmado con audio (2026-09-04) — se espera el mismo comportamiento aquí.
+     */
+    val AMP_SOLO_ENABLED = Address(0x60, 0x00, 0x00, 0x2B)
+
+    /**
+     * **Solo Level del amplificador, `60 00 00 2C`.** Escala directa `00/64` = 0..100:
+     * [PANEL_LEVEL_SCALE].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:37496` la nombra `PREAMP: Solo Level`. Mismo
+     * concepto que [BOOST_SOLO_LEVEL] pero a nivel de preamp.
+     */
+    val AMP_SOLO_LEVEL = Address(0x60, 0x00, 0x00, 0x2C)
 
     /**
      * **Variación del amplificador (el LED "VARIATION"), `60 00 06 5C` — SOLO LECTURA.**
@@ -738,11 +794,200 @@ object KatanaAddresses {
      * ⚠️ Alternativas "bajas" de Delay, **que nunca hicieron falta probar**: `60 00 05 06`
      * (`de_effect_lvl`) y `60 00 05 04` (`de_feedback_lvl`, que `Adresses.txt:127` marca con
      * `?`). Se conservan por si Delay diera problemas más adelante.
+     *
+     * ⚠️ **Con los parámetros internos de Delay ya extraídos (ver más abajo), estas dos
+     * direcciones dejaron de ser "alternativas sin usar": son exactamente [DELAY_EFFECT_LEVEL]
+     * y [DELAY_FEEDBACK], los parámetros internos reales de Delay 1**, no una alternativa a la
+     * perilla del panel. Se conserva esta lista para no romper lo que ya la usaba, pero el
+     * KDoc queda desactualizado a propósito de "nunca hizo falta probar": si algún día se
+     * prueban, es como parámetros internos, no como sustitutos de [DELAY_LEVEL].
      */
     val DELAY_LEVEL_LOW = listOf(
         Address(0x60, 0x00, 0x05, 0x06),
         Address(0x60, 0x00, 0x05, 0x04),
     )
+
+    // --- Parámetros internos fijos de Delay 1 y Reverb (CLAUDE.md §5.2) --------------------
+    //
+    // ⚠️ Implementados, pendientes de confirmar con audio. Delay y Reverb son "DSP simple"
+    // igual que Booster: un único bloque fijo de direcciones, el mismo para cualquier tipo
+    // activo — no dependen del tipo activo como Mod/FX. **Fuente única**:
+    // `reference/FxFloorboard/midi.xml:42413-42488` (Delay 1, bloque `desc="DD1:"`) y
+    // `:42860-42935` (Reverb, bloque `desc="REV:"`/`"REVERB:"`). Ninguno de estos parámetros
+    // aparece en `reference/TuxKatana/params/delay.yaml` ni `reverb.yaml` más allá de lo ya
+    // implementado (On/Off, Type, color, nivel de panel) ni en `Adresses.txt`.
+
+    /**
+     * **Delay Time, `60 00 05 02`–`03` (2 bytes).** Escala directa, milisegundos 1:1:
+     * [DELAY_TIME_SCALE].
+     *
+     * ⚠️ Implementado, **sin confirmar con audio**. `midi.xml:42413-42461` documenta el valor
+     * como 16 posiciones del primer byte (`00`..`0F`, el MSB) cada una con un sub-rango del
+     * segundo (el LSB) — el mismo esquema MSB×128+LSB que ya usa [ACTIVE_CHANNEL], y que aquí
+     * cubre limpiamente `1`..`1999` ms en 15 de los 16 tramos.
+     *
+     * ⚠️ **Un tramo de la fuente no cuadra, y no bloquea la implementación.** El tramo
+     * `MSB=0x0E` documenta crudo `00`..`4F` (80 valores) mostrado como `1792`..`1919` ms (128
+     * valores) — un ancho que no coincide, cosa que no le pasa a ningún otro tramo ni al de al
+     * lado (`MSB=0x0F`: crudo `00`..`4F` → `1920`..`1999`, ese ancho sí encaja con el crudo).
+     * El propio [REVERB_PRE_DELAY], con la misma estructura de 4 tramos, es limpio en los
+     * cuatro. La lectura más probable es un error de copia en esa única fila de `midi.xml`
+     * (el ancho que falta, 48, es justo lo que sobra si el tope real fuera `7F` en vez de
+     * `4F`) y no un cambio real de resolución — pero **es solo una lectura, no una prueba**.
+     * Se cablea igual, con [LevelScale.direct] sobre el rango entero `1..2000`, porque el
+     * `MidiBytes` de 14 bits ya decodifica cualquier valor del rango sin necesitar una escala
+     * nueva; lo que queda pendiente es confirmar con audio específicamente el tramo
+     * `1792`-`1999` ms, por si el amplificador de verdad usara ahí una resolución más gruesa.
+     */
+    val DELAY_TIME = Address(0x60, 0x00, 0x05, 0x02)
+
+    /** Rango de [DELAY_TIME]: `1..2000` ms, directo — ver su KDoc para la salvedad. */
+    val DELAY_TIME_SCALE: LevelScale = LevelScale.direct(1..2000)
+
+    /**
+     * **Feedback de Delay 1, `60 00 05 04`.** Escala directa `00/64` = 0..100:
+     * [PANEL_LEVEL_SCALE].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42465` la nombra `DD1: Feedback`.
+     */
+    val DELAY_FEEDBACK = Address(0x60, 0x00, 0x05, 0x04)
+
+    /**
+     * **High Cut de Delay 1, `60 00 05 05`.** Selector de 15 frecuencias: usa
+     * [DelayHighCutFrequency.VALUES].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42468-42482` la nombra `DD1: High Cut`. No
+     * confundir con [REVERB_HIGH_CUT]: comparten estructura y casi todos los valores, pero no
+     * son el mismo catálogo — ver el KDoc de [ReverbHighCutFrequency].
+     */
+    val DELAY_HIGH_CUT = Address(0x60, 0x00, 0x05, 0x05)
+
+    /**
+     * **Effect Level de Delay 1, `60 00 05 06`.** Escala directa `00/78` = 0..120:
+     * [DELAY_EFFECT_SCALE].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42485` la nombra `DD1: Effect`.
+     */
+    val DELAY_EFFECT_LEVEL = Address(0x60, 0x00, 0x05, 0x06)
+
+    /** Rango de [DELAY_EFFECT_LEVEL]: `00/78/0/120`, directo — misma forma que [BOOST_DRIVE_SCALE]. */
+    val DELAY_EFFECT_SCALE: LevelScale = LevelScale.direct(0..120)
+
+    /**
+     * **Direct Mix de Delay 1, `60 00 05 07`.** Escala directa `00/64` = 0..100:
+     * [PANEL_LEVEL_SCALE].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42488` la nombra `DD1: Direct`.
+     */
+    val DELAY_DIRECT_MIX = Address(0x60, 0x00, 0x05, 0x07)
+
+    /**
+     * **Reverb Time, `60 00 05 42`.** Escala fraccionaria, paso de 0.1 s: [REVERB_TIME_SCALE].
+     *
+     * ⚠️ Implementado, **sin confirmar con audio** (2026-09-05) — desbloqueado al extender
+     * [FractionalLevelScale] (ver su KDoc). `midi.xml:42873` la nombra `REV: Reverb Time` con
+     * `range 00/63/0.1/10.0 sec`: crudo `0x00`..`0x63` (0..99) mostrado como `0.1`..`10.0`
+     * **segundos**, es decir `mostrado = 0.1 + crudo × 0.1` — el mismo `(crudo + 1) / 10` de
+     * siempre, solo que expresado como lo pide `FractionalLevelScale`: el `+1` no es un campo
+     * aparte, sale de que `displayRange` empieza en `0.1`, no en `0.0`.
+     *
+     * Se quedó sin cablear una temporada porque [LevelScale] solo sabe sumar un desplazamiento
+     * entero, no dividir, y no podía representar "un paso de 0.1" — la misma anomalía que el
+     * Pre Delay de 2x2 Chorus en Mod (CLAUDE.md §5.2, ver [MOD_CHORUS_PRE_DELAY_LOW]).
+     */
+    val REVERB_TIME = Address(0x60, 0x00, 0x05, 0x42)
+
+    /** Rango de [REVERB_TIME]: crudo `0..99` (`0x00..0x63`), mostrado `0.1..10.0` s, paso `0.1`. */
+    val REVERB_TIME_SCALE: FractionalLevelScale =
+        FractionalLevelScale(rawRange = 0..0x63, displayRange = 0.1..10.0, step = 0.1)
+
+    /**
+     * **Pre Delay de Reverb, `60 00 05 43`–`44` (2 bytes).** Escala directa, milisegundos 1:1:
+     * [REVERB_PRE_DELAY_SCALE].
+     *
+     * ⚠️ Implementado, **sin confirmar con audio**. `midi.xml:42876-42891` documenta el mismo
+     * esquema MSB×128+LSB que [DELAY_TIME], pero **sin la irregularidad de aquel**: los 4
+     * tramos (`00`..`03`) son limpios de punta a punta —`00`..`7F`→`0`-`127`, ..., y el último
+     * `00`..`73`→`384`-`499` con el valor especial `74`→`500` encajando exacto (`384+116=500`).
+     * Rango entero `0..500` ms, [LevelScale.direct].
+     */
+    val REVERB_PRE_DELAY = Address(0x60, 0x00, 0x05, 0x43)
+
+    /** Rango de [REVERB_PRE_DELAY]: `0..500` ms, directo. */
+    val REVERB_PRE_DELAY_SCALE: LevelScale = LevelScale.direct(0..500)
+
+    /**
+     * **Low Cut de Reverb, `60 00 05 45`.** Selector de 18 frecuencias: usa
+     * [ReverbLowCutFrequency.VALUES].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42892-42906` la nombra `REV: Low Cut`.
+     */
+    val REVERB_LOW_CUT = Address(0x60, 0x00, 0x05, 0x45)
+
+    /**
+     * **High Cut de Reverb, `60 00 05 46`.** Selector de 15 frecuencias: usa
+     * [ReverbHighCutFrequency.VALUES].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42912-42922` la nombra `REV: High Cut`. Ver el
+     * KDoc de [ReverbHighCutFrequency] para la discrepancia con [DELAY_HIGH_CUT] en `0x0A`.
+     */
+    val REVERB_HIGH_CUT = Address(0x60, 0x00, 0x05, 0x46)
+
+    /**
+     * **Density de Reverb, `60 00 05 47`.** Escala directa `00/0A` = 0..10 —**no** 0..100,
+     * a diferencia de casi todo lo demás de este bloque: [REVERB_DENSITY_SCALE].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42925` la nombra `REV: Density`.
+     */
+    val REVERB_DENSITY = Address(0x60, 0x00, 0x05, 0x47)
+
+    /** Rango de [REVERB_DENSITY]: `00/0A/0/10`, directo. */
+    val REVERB_DENSITY_SCALE: LevelScale = LevelScale.direct(0..10)
+
+    /**
+     * **Direct Mix de Reverb, `60 00 05 49`.** Escala directa `00/64` = 0..100:
+     * [PANEL_LEVEL_SCALE].
+     *
+     * ⚠️ Implementado, sin confirmar. `midi.xml:42931` la nombra `REV: Direct Mix`.
+     */
+    val REVERB_DIRECT_MIX = Address(0x60, 0x00, 0x05, 0x49)
+
+    // --- Primer parámetro interno de Mod cableado: Pre Delay de 2x2 Chorus (CLAUDE.md §5.2) --
+    //
+    // ⚠️ Implementado, pendiente de confirmar con audio. A diferencia de Booster/Delay/Reverb
+    // ("DSP simple", un bloque fijo para cualquier tipo), Mod es "DSP complejo": cada tipo
+    // tiene su propio bloque de direcciones, y estas dos **solo significan "Pre Delay" cuando
+    // el tipo activo de Mod es 2x2 Chorus** (`ModFxType.CHORUS`, `0x1D`). Con cualquier otro
+    // tipo activo, `60 00 02 3A`/`3E` caen dentro del bloque de ESE otro tipo y significan otra
+    // cosa (o nada, si el tipo usa menos direcciones) — la UI condiciona el control a que el
+    // tipo activo sea 2x2 Chorus, no lo muestra siempre como Booster/Delay/Reverb.
+
+    /**
+     * **Pre Delay de 2x2 Chorus, banda Low, `60 00 02 3A`.** Escala fraccionaria, paso de
+     * 0.5 ms: [MOD_CHORUS_PRE_DELAY_SCALE].
+     *
+     * ⚠️ Implementado, **sin confirmar con audio** (2026-09-05) — desbloqueado al extender
+     * [FractionalLevelScale] (ver su KDoc). `midi.xml` documenta `range 00/50/0.0/40.0` para
+     * el bloque `MOD 2CE:` de 2x2 Chorus (CLAUDE.md §5.2, tabla de "2x2 Chorus"): crudo
+     * `0x00`..`0x50` (0..80) mostrado como `0.0`..`40.0` ms, paso de 0.5 ms.
+     *
+     * ⚠️ **`midi.xml` repite los nombres `Rate`/`Depth`/`Pre Delay` para las dos bandas sin
+     * distinguirlas** — lo único que dice cuál es cuál es la posición respecto a los niveles
+     * `3B` Low y `3F` High que cierran cada grupo (CLAUDE.md §5.2). El "banda Low"/"banda High"
+     * de este KDoc y el de [MOD_CHORUS_PRE_DELAY_HIGH] es interpretación razonada, no literal
+     * de la fuente.
+     */
+    val MOD_CHORUS_PRE_DELAY_LOW = Address(0x60, 0x00, 0x02, 0x3A)
+
+    /** **Pre Delay de 2x2 Chorus, banda High, `60 00 02 3E`.** Ver [MOD_CHORUS_PRE_DELAY_LOW]. */
+    val MOD_CHORUS_PRE_DELAY_HIGH = Address(0x60, 0x00, 0x02, 0x3E)
+
+    /**
+     * Rango de [MOD_CHORUS_PRE_DELAY_LOW]/[MOD_CHORUS_PRE_DELAY_HIGH]: crudo `0..80`
+     * (`0x00..0x50`), mostrado `0.0..40.0` ms, paso `0.5`.
+     */
+    val MOD_CHORUS_PRE_DELAY_SCALE: FractionalLevelScale =
+        FractionalLevelScale(rawRange = 0..0x50, displayRange = 0.0..40.0, step = 0.5)
 
     // --- Canal/preset activo ---------------------------------------------------------------
     //

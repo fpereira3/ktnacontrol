@@ -586,6 +586,145 @@ seguimiento, no repite lo que ya está ahí.
     escala de usuario del Harmonist, Acu Processor cruzando el límite de página `01 7F`→`02 00`,
     y los nombres repetidos sin desambiguar en 2x2 Chorus y DC30.
 
+- **2026-09-04 — Arreglado el bug de recarga al cambiar de canal**, implementando el diseño
+  documentado el mismo día (ver "Notas y decisiones técnicas" para el detalle de cada pieza).
+  Cierra los cuatro fallos encadenados de "Hallazgos de diagnóstico" (ya retirado de ahí):
+  el filtro por dirección+tamaño en `sendAndCollectUntilQuiet`, `applyDumpValue` respetando
+  `byteWidth`, y un único punto de disparo de recarga en el ViewModel con mutex y guard
+  reevaluado tras el margen.
+  - **Los tres criterios que antes fallaban ahora se comprueban en JVM**, con el mismo
+    reproductor que diagnosticó el bug: un solo dump para 1A→2A→3A, máximo un dump en vuelo
+    (incluso haciendo la recarga de conexión deliberadamente lenta para forzar el solape), y
+    el canal en caché igual al del amplificador al final. Más un cuarto criterio nuevo: un
+    reporte espontáneo emitido durante la ventana del dump aparece en `rejected`, no en
+    `accepted`. 10 tests nuevos (208 en total, todos verdes), tres reruns sin fallos.
+  - ⚠️ **Sin confirmar contra el amplificador real todavía** — ver "Pendiente por probar".
+  - La fase 2 opcional (`Set` de direcciones tocadas durante el dump, para que un reporte
+    espontáneo en vuelo no se pise con un valor del bloque tomado antes) **queda sin
+    implementar a propósito**: no bloqueaba el arreglo principal.
+
+- **2026-09-04 — ✅ Confirmado con audio real: los tipos de efecto de Mod, FX, Delay y
+  Reverb, y los 9 parámetros internos de Booster.** Todo probado con Edit Mode activado.
+  Cierra de golpe cinco entradas de "Pendiente por probar" (ya retiradas de ahí).
+  - **Tipos de efecto** (`60 00 01 01` Mod, `60 00 03 01` FX, `60 00 05 01` Delay 1,
+    `60 00 05 41` Reverb): la dirección de "tipo activo" acepta la escritura en los cuatro,
+    igual que ya se había confirmado en Booster el 2026-09-03. **Los cinco efectos siguen el
+    mismo patrón**, así que la analogía que se implementó a propósito sin darla por buena
+    (CLAUDE.md §5.2) resultó correcta — esta vez.
+  - **Los 9 parámetros internos de Booster** (`60 00 00 10`–`18`): Drive, Bottom, Tone,
+    Solo Sw, Solo Level, Effect Level y Direct Mix, más el On/Off y el Type que ya estaban.
+    Confirma de paso las dos cosas que se habían deducido de `midi.xml` sin probarlas: que
+    `60 00 00 12` es Drive y no una "alternativa baja" de la perilla del panel, y que
+    Bottom/Tone son la escala centrada `-50..+50` que se modeló con `LevelScale.centered(50)`.
+
+- **2026-09-04 — Contrato de Edit Mode en la UI: apagado deja cambiar de canal y nada más.**
+  Con edit mode apagado el amplificador no manda reportes espontáneos, así que la app no puede
+  confirmar ningún parámetro que escriba; mostrar los controles como si funcionaran era
+  mentirle al usuario. Ver el contrato en CLAUDE.md §4.2 y la prueba pendiente 2.
+  - `SlidersPane` calcula `canEdit = connected && editMode` y lo pasa a **todo** menos al
+    selector de canal y al propio interruptor de Edit Mode. Los parámetros —sliders del
+    amplificador, categoría/modelo/variación, y las cinco tarjetas de efecto con su color,
+    tipo, on/off, nivel y los internos de Booster— quedan grises y no responden.
+  - **El selector de canal sigue habilitado a propósito**, con solo `connected`: es la
+    excepción explícita del contrato. Un test JVM nuevo fija además que el SET del canal sale
+    al cable sin condiciones, para que nadie meta un gate de edit mode en `device/` — donde el
+    concepto no existe ni debe existir.
+  - Un aviso en rojo bajo el interruptor explica por qué está todo gris. Un control
+    deshabilitado sin explicación se lee como un bug; con una línea de texto se lee como una
+    regla.
+  - **Nuevo aviso en el log cuando el amplificador ignora un cambio de canal**
+    (`reportIgnoredChannelWrite`): si la relectura dice que el amp sigue en otro canal, lo
+    dice explícitamente y menciona si Edit Mode estaba apagado. Sin eso el síntoma es que el
+    selector "vuelve solo" sin ninguna pista — la misma firma que delató que `60 00 06 5C`
+    era de solo lectura (CLAUDE.md §5).
+
+- **2026-09-04 — Cableados los cuatro controles que faltaban del bloque PREAMP**
+  (`60 00 00 29`–`2C`): Bright, Gain SW, Solo Sw y Solo Level. Cierra la parte accionable de
+  "Cambiar el tipo de amplificador no recarga nada" — ver esa nota para la tabla completa y
+  la pregunta que queda abierta (si el amp recalcula o conserva al cambiar de tipo, que sigue
+  sin implementación a propósito).
+  - `KatanaAddresses.AMP_BRIGHT`/`AMP_GAIN_SW`/`AMP_SOLO_ENABLED`/`AMP_SOLO_LEVEL`, todas de
+    una sola fuente Mk2 (`midi.xml:37483-37496`, ninguna otra fuente documenta este tramo del
+    bloque). Bright y Solo Sw son switches (`SWITCH_VALUES`); Gain SW es el primer selector
+    de tres posiciones del proyecto (`GAIN_SW_VALUES`, Low/Middle/High); Solo Level reutiliza
+    `PANEL_LEVEL_SCALE`, la misma escala directa `0..100` de los paneles.
+  - **Gain/Bass/Middle/Treble/Presence/Volume del preamp (`00 22`, `00 24`–`28`) no se
+    duplicaron.** Ya tenían alias `*_LEVEL_LOW` documentados y sin usar; las direcciones
+    altas (`06 51`–`06 56`) llevan confirmadas con audio desde 2026-09-03 y siguen siendo la
+    fuente de verdad. Cablear las bajas habría sido un control repetido sin ningún beneficio.
+  - En la UI, las cuatro filas nuevas van en `SlidersPane` justo debajo del switch de
+    Variación, dentro del mismo bloque de amplificador — no en las tarjetas de efecto, porque
+    son parámetros del preamp, no de un efecto. Todas caen bajo `canEdit` como el resto.
+  - **Ya vienen en el dump** (`60 00 00 2x` cae de lleno en `60 00 00 00` + 1920 B): no hizo
+    falta tocar el rango del GET, solo registrar los controles — confirmado leyendo el código,
+    no hace falta probarlo aparte.
+  - 2 tests JVM nuevos (211 en total): el SET de los cuatro sale con su checksum correcto y no
+    se pisan entre sí, y `AMP_GAIN_SW` rechaza un valor fuera de sus tres posiciones sin
+    escribir nada — mismo patrón de rechazo que el resto de selectores del proyecto.
+
+- **2026-09-05 — Parámetros internos fijos de Delay 1 y Reverb** (CLAUDE.md §5.2, "DSP
+  simple"), siguiendo el mismo patrón que Booster. ⚠️ Implementado, pendiente de confirmar con
+  audio — ver "Pendiente por probar", punto 4.
+  - **Delay 1**: Time (`60 00 05 02`–`03`, 2 bytes, `1..2000` ms), Feedback (`05 04`,
+    `0..100`), High Cut (`05 05`, selector de 15 frecuencias), Effect Level (`05 06`,
+    `0..120`) y Direct Mix (`05 07`, `0..100`).
+  - **Reverb**: Pre Delay (`05 43`–`44`, 2 bytes, `0..500` ms), Low Cut (`05 45`, selector de
+    18 frecuencias), High Cut (`05 46`, selector de 15 frecuencias), Density (`05 47`,
+    `0..10` — no `0..100`, la excepción del bloque) y Direct Mix (`05 49`, `0..100`).
+  - **Fuente única**: `reference/FxFloorboard/midi.xml`, bloques `desc="DD1:"` (Delay 1) y
+    `desc="REV:"`/`"REVERB:"` (Reverb) — ninguna otra fuente de Mk2 documenta estos
+    parámetros. Cada dirección lleva su cita de línea en el KDoc de `KatanaAddresses`.
+  - **Dos direcciones deliberadamente NO cableadas**: Reverb Time (`60 00 05 42`) tiene un
+    paso de 0.1s que `LevelScale` no puede representar sin extenderse (misma anomalía que el
+    Pre Delay de Mod, sin resolver todavía); Reverb Effect Level (`60 00 05 48`) resultó ser
+    la misma dirección que `REVERB_LEVEL_DERIVED`, ya probada como no funcional en la
+    investigación del reverb (2026-09-02) — identificar qué era no la reabre como candidata.
+  - **Un hallazgo de la propia fuente, documentado y no bloqueante**: el tramo `MSB=0x0E` de
+    Delay Time (`midi.xml:42468`) da un ancho de crudo que no cuadra con el ancho mostrado —
+    los otros 15 tramos son limpios, y el `REVERB_PRE_DELAY` gemelo también es limpio en los
+    4 suyos. Lectura más probable: un error de copia en esa fila, no una resolución real
+    distinta. Se cableó igual con `LevelScale.direct(1..2000)`; queda pendiente confirmar con
+    audio específicamente el tramo `1792`-`1999` ms — ver punto 4.
+  - **Dos catálogos nuevos que parecen la misma lista y no lo son**: `DelayHighCutFrequency`
+    y `ReverbHighCutFrequency` (15 valores cada uno) difieren en `0x0A` (`"6.30K"` vs
+    `"6.00k"`) — la propia fuente se contradice entre sus dos bloques. Se mantienen como
+    catálogos separados a propósito. `ReverbLowCutFrequency` (18 valores) no tiene gemela.
+  - UI: nuevas filas en las tarjetas de Delay y Reverb (`DelayInternalParams`/
+    `ReverbInternalParams`), con los selectores de frecuencia como `DropdownSelector` — igual
+    que el modelo de amplificador, por el número de opciones. Todo bajo `canEdit`.
+  - 22 tests JVM nuevos (233 en total): checksums de cada SET nuevo, rechazo de los tres
+    selectores de frecuencia fuera de catálogo, no-colisión entre los bloques adyacentes de
+    Delay y Reverb, y los tres catálogos (tamaño, sin huecos, valores únicos).
+
+- **2026-09-05 — `FractionalLevelScale`: desbloquea Reverb Time y el Pre Delay de 2x2 Chorus
+  en Mod.** ⚠️ Implementado, pendiente de confirmar con audio — ver "Pendiente por probar",
+  punto 5. Los dos habían quedado documentados y sin cablear porque `LevelScale` solo sabe
+  sumar un desplazamiento entero, no dividir, y ninguno de los dos usa "un byte crudo = una
+  unidad mostrada": Reverb Time tiene paso de 0.1 s, el Pre Delay de 0.5 ms.
+  - **Tipo nuevo en vez de ampliar `LevelScale` a `Double`**: los ~230 tests que ya existían
+    asumen `Int` en todo lo demás, así que se creó `FractionalLevelScale` aparte (con su
+    `KatanaFractionalParameter` gemelo en `device/`) en vez de tocar el contrato del resto de
+    controles. La fórmula `mostrado = displayRange.start + (crudo − rawRange.first) × step`
+    no necesitó un campo de desplazamiento aparte para el `+1` de Reverb Time: sale solo de
+    que `displayRange` empiece en `0.1`.
+  - **Sin arrastre de error de punto flotante**: cada conversión ida-y-vuelta arranca desde
+    un entero limpio en vez de acumular sobre la anterior. Test dedicado que repite el viaje
+    50 veces sobre el mismo valor y comprueba que no se mueve del crudo original.
+  - **Reverb Time (`60 00 05 42`)**: DSP simple, cableado sin condiciones, igual que el resto
+    del bloque de Reverb ya implementado.
+  - **Pre Delay de 2x2 Chorus (`60 00 02 3A` banda Low, `60 00 02 3E` banda High)**: primer
+    parámetro interno de Mod cableado en código. A diferencia de Booster/Delay/Reverb ("DSP
+    simple"), Mod es "DSP complejo" — cada tipo activo tiene su propio bloque de direcciones
+    — así que estas dos direcciones **solo significan "Pre Delay" con el tipo activo en 2x2
+    Chorus**; la UI oculta los sliders y muestra un aviso cuando el tipo activo es otro, en
+    vez de dejarlos visibles y potencialmente mal etiquetados.
+  - UI: `FractionalLevelControl` (gemelo de `LevelControl` para `Double`), añadido a la
+    tarjeta de Reverb (antes de Pre Delay) y a una nueva tarjeta condicional de Mod.
+  - 17 tests JVM nuevos (250 en total): bordes exactos del rango (incluido el máximo real de
+    Reverb Time, `10.0` s, y de 2x2 Chorus Pre Delay, `40.0` ms), redondeo sin arrastre en
+    conversiones repetidas, clamping en los dos sentidos, y no-colisión con los bloques
+    adyacentes (tipo de reverb, pre delay de 2 bytes de reverb).
+
 ## En progreso
 
 
@@ -595,74 +734,12 @@ Lo que está **implementado pero todavía no confirmado contra el amplificador r
 entrada dice en qué consiste la prueba y qué resultado cuenta como éxito, siguiendo la
 disciplina de siempre (CLAUDE.md §5): nada se da por bueno hasta oírlo o verlo en el amp.
 
-1. **Tipo de MOD** (`60 00 01 01`, catálogo `ModFxType`, 31 valores).
-   - **Prueba**: con el efecto MOD encendido, cambiar su tipo desde el desplegable de la
-     tarjeta de la app (por ejemplo, de "2x2 Chorus" a "Phaser"). Por separado, cambiar el
-     color de MOD directamente con el botón físico del panel.
-   - **Resultado esperado si funciona** (mismo patrón que Booster, ya confirmado):
-     - El carácter del efecto cambia de forma audible y reconocible al tipo elegido — un
-       Chorus se oye como modulación en coro, un Phaser como un barrido de fase. Esto es lo
-       único que decide; un GET que devuelve lo escrito no prueba nada (§5).
-     - Al pulsar el botón físico de color de MOD, el desplegable de tipo de la app cambia
-       solo al tipo que tiene asignado ese color (reporte espontáneo, con edit mode activo).
-   - **Si falla** (no cambia el sonido, o el valor rebota al anterior): es la firma de una
-     dirección de solo reporte, igual que pasó con `60 00 06 5C` — documentar y reabrir la
-     duda de si hay que escribir en el slot de color (`60 00 06 27`/`28`/`29`) en su lugar.
-
-2. **Tipo de FX** (`60 00 03 01`, mismo catálogo `ModFxType`).
-   - **Prueba y resultado esperado**: igual que el punto 1, pero con el efecto FX y sus
-     colores (`60 00 06 2A`/`2B`/`2C`).
-
-3. **Tipo de Delay 1** (`60 00 05 01`, catálogo `DelayType`, 11 valores).
-   - **Prueba**: con el efecto Delay encendido, cambiar su tipo desde el desplegable de la
-     app (por ejemplo, de "Digital" a "Analog"). Por separado, cambiar el color de Delay con
-     el botón físico del panel.
-   - **Resultado esperado si funciona**: un delay analógico suena claramente distinto a uno
-     digital — más cálido, con más pérdida de tonos agudos en las repeticiones —, así que el
-     cambio de carácter debe ser reconocible al oído. El desplegable debe sincronizarse solo
-     al cambiar de color en el panel físico (reporte espontáneo).
-   - **Si falla**: mismo diagnóstico que en los puntos 1 y 2 — sospechar de dirección de solo
-     reporte y considerar el slot de color (`60 00 06 2D`/`2E`/`2F`) como alternativa.
-
-4. **Tipo de Reverb** (`60 00 05 41`, catálogo `ReverbType`, 7 valores).
-   - **Prueba**: con el efecto Reverb encendido, cambiar su tipo desde el desplegable de la
-     app (por ejemplo, de "Plate" a "Hall 1"). Por separado, cambiar el color de Reverb con
-     el botón físico del panel.
-   - **Resultado esperado si funciona**: un reverb de plate suena metálico y denso desde el
-     principio; uno de hall tiene una cola más larga y difusa, con un ataque más suave — la
-     diferencia debe notarse de inmediato al escuchar. Igual que arriba, el desplegable debe
-     seguir los cambios de color hechos en el panel físico.
-   - **Si falla**: mismo diagnóstico; la alternativa sería el slot de color
-     (`60 00 06 30`/`31`/`32`).
-
-5. **Los 9 parámetros internos de Booster** (`60 00 00 10`–`18`, CLAUDE.md §5.2). On/Off y
-   Type ya están confirmados; lo que sigue prueba los siete nuevos.
-   - **Drive** (`60 00 00 12`, `0..120`).
-     - **Prueba**: mover el slider de Drive de 0 a 120 con Booster encendido.
-     - **Resultado esperado si funciona**: el nivel de distorsión/saturación del Booster
-       aumenta de forma audible y progresiva — de un sonido limpio a uno claramente saturado.
-   - **Bottom y Tone** (`60 00 00 13`/`14`, `-50..+50` centrados en cero).
-     - **Prueba**: mover cada slider de un extremo a otro por separado, con Booster encendido
-       y a un Drive intermedio para que el timbre se note.
-     - **Resultado esperado si funciona**: Bottom cambia la coloración de graves del boost
-       (más grave hacia `-50`, menos hacia `+50`, o viceversa); Tone hace lo mismo con los
-       agudos. En `0` debería sonar como el punto neutro documentado por las fuentes.
-   - **Solo Sw y Solo Level** (`60 00 00 15`/`16`).
-     - **Prueba**: activar el switch de Solo y mover el slider de Solo Level de 0 a 100.
-     - **Resultado esperado si funciona**: activar Solo cambia el nivel de salida del Booster
-       de forma audible (es el "modo solo" para resaltar el instrumento), y el slider ajusta
-       cuánto sube ese nivel.
-   - **Effect Level y Direct Mix** (`60 00 00 17`/`18`).
-     - **Prueba**: con Booster encendido, mover Effect Level de 0 a 100 y por separado Direct
-       Mix de 0 a 100.
-     - **Resultado esperado si funciona**: Effect Level cambia cuánta señal procesada por el
-       Booster se oye (en 0, el efecto casi desaparece); Direct Mix cambia el balance entre
-       la señal procesada y la señal limpia sin procesar — en un extremo debería oírse solo
-       una, en el otro solo la otra.
-   - **Si falla cualquiera** (no cambia el sonido, o el valor rebota al anterior): mismo
-     diagnóstico que en los demás casos — dirección de solo reporte, como `60 00 06 5C`.
-
-6. **Recarga completa del estado al cambiar de canal.**
+1. ⚠️ **Recarga completa del estado al cambiar de canal — arreglado y probado en JVM
+   (2026-09-04), pendiente de confirmar con el amplificador real.** El bug de los cuatro
+   fallos encadenados —filtro por dirección+tamaño en el dump, `byteWidth` en
+   `applyDumpValue`, único punto de disparo con mutex, guard reevaluado tras el margen— está
+   arreglado; ver "Hecho". Los tres criterios de éxito de abajo se comprueban con un
+   reproductor JVM, no todavía con el amplificador delante.
    - **Prueba**: con presets distintos guardados en al menos dos canales (por ejemplo 1A y
      2A con modelos de amplificador o efectos distintos), cambiar de canal desde el selector
      de la app y observar el log y los controles. Repetir cambiando de canal con el
@@ -678,7 +755,211 @@ disciplina de siempre (CLAUDE.md §5): nada se da por bueno hasta oírlo o verlo
        queda al final — no una por cada canal intermedio.
    - **Si falla**: revisar en el log si `repository.channel.state` sí cambia (el chip de
      canal de la app se mueve) pero no aparece la línea de recarga — apuntaría a un problema
-     en `watchChannelChanges`, no en la lectura del canal en sí.
+     en `startReloadCoordinator`, no en la lectura del canal en sí.
+
+2. ⚠️ **El contrato de Edit Mode: apagado deja cambiar de canal, encendido deja todo.**
+   Implementado el 2026-09-04 en la UI (`SlidersPane`); falta la parte que solo el
+   amplificador puede responder — si acepta el SET de canal con edit mode apagado. Ver
+   "Hallazgos de diagnóstico" para por qué esto **no** es una regresión del fix de recarga.
+   - **Prueba A, con Edit Mode APAGADO**: cambiar de canal desde el selector de la app.
+     - **Éxito**: el amplificador cambia de canal de verdad (se oye, y el panel lo muestra),
+       y el selector de la app se queda en el canal nuevo sin volver atrás.
+     - **Si el amplificador NO cambia**: el selector volverá solo al canal real —eso es la
+       app funcionando bien, no un bug— y en el log debe aparecer
+       `! Se pidió el canal X pero el amplificador sigue en Y. Edit Mode está apagado.`
+       Ese mensaje es la confirmación de que **el amplificador exige edit mode para aceptar
+       la escritura del canal**, que es la hipótesis que queda por decidir. Si sale, el
+       contrato "cambiar de canal siempre" no se puede cumplir solo con SysEx a
+       `00 01 00 00`: habría que replantearlo con Program Change (§5.1) o encendiendo edit
+       mode para la escritura, y las dos cosas tienen coste propio.
+   - **Prueba B, con Edit Mode APAGADO**: mirar el resto de la pantalla de Sliders.
+     - **Éxito**: sliders, selectores de amplificador y las cinco tarjetas de efecto se ven
+       **grises y no responden**, con el aviso "Edit Mode apagado: solo se puede cambiar de
+       canal" justo debajo del interruptor. El selector de canal es el único que sigue vivo.
+   - **Prueba C, con Edit Mode ENCENDIDO**: todo vuelve a estar habilitado y sigue
+     funcionando como hasta ahora — el aviso desaparece.
+
+3. ⚠️ **Los cuatro controles restantes del bloque PREAMP** (`60 00 00 29`–`2C`), implementados
+   el 2026-09-04, pendientes de confirmar con audio. Con Edit Mode encendido, en la tarjeta de
+   Amplificador, justo debajo del switch de Variación:
+   - **Bright** (`60 00 00 29`, switch on/off): activarlo y desactivarlo mientras suena una
+     nota sostenida. **Éxito esperado**: cambia el brillo/color tonal del sonido de forma
+     audible — más agudos presentes con Bright activado.
+   - **Gain SW** (`60 00 00 2A`, tres posiciones Low/Middle/High): mover el selector con la
+     misma nota sostenida. **Éxito esperado**: cambia el rango o la sensibilidad de la
+     perilla GAIN — probablemente el techo de ganancia disponible, a la manera de un control
+     de "gama" del preamp, pero **verificar el efecto exacto contra `katana_sysex.txt` o
+     `Adresses.txt`** antes de dar por buena la interpretación, porque ninguna fuente de Mk2
+     lo explica más allá del nombre literal.
+   - **Solo Sw / Solo Level** (`60 00 00 2B`/`2C`): mismo comportamiento ya confirmado en
+     Booster (2026-09-04) — activar Solo Sw debe aislar la señal para ajuste de nivel, y
+     mover Solo Level debe cambiar audiblemente ese nivel mientras Solo Sw está activo.
+   - **Si alguno falla en silencio** (el slider se mueve pero no pasa nada, sin que el valor
+     rebote solo): revisar primero si acepta el SET con un GET inmediato después — el
+     precedente es `60 00 06 5C` (variación), que aceptaba el SET pero el amplificador lo
+     ignoraba y seguía reportando su valor real; aquí en cambio el síntoma de "no pasa nada"
+     sin rebote apuntaría a que la dirección sí escribe pero no está conectada a nada audible,
+     que sería un caso nuevo no visto todavía en este proyecto.
+
+4. ⚠️ **Parámetros internos fijos de Delay 1 y Reverb** (CLAUDE.md §5.2), implementados el
+   2026-09-05, pendientes de confirmar con audio. Con Edit Mode encendido, en las tarjetas de
+   Delay y Reverb:
+   - **Delay Time** (`60 00 05 02`, `1..2000` ms): mover el slider por todo el rango con una
+     nota repetida (o un loop) sonando. **Éxito esperado**: el espaciado entre repeticiones
+     del eco cambia de forma audible y proporcional al valor. **Presta atención especial al
+     tramo `1792`-`1999` ms** (cerca del máximo): es donde `midi.xml` tiene la irregularidad
+     documentada (CLAUDE.md §5.2) — si en ese tramo el espaciado deja de ser proporcional al
+     valor mostrado (p. ej. si moverse de 1800 a 1900 ms no cambia nada, o cambia mucho más de
+     lo esperado), confirmaría que el amplificador de verdad usa ahí una resolución más
+     gruesa, y habría que revisar la escala solo para ese tramo.
+   - **Delay Feedback** (`05 04`, `0..100`): con el delay activo, subir y bajar. **Éxito**:
+     cambia el número de repeticiones audibles antes de apagarse — más feedback, más
+     repeticiones.
+   - **Delay High Cut** (`05 05`, 15 frecuencias): mover el selector de `630Hz` a `FLAT` con
+     el delay sonando. **Éxito**: las repeticiones se oyen más oscuras/apagadas en el extremo
+     bajo (630Hz) y más brillantes/sin filtrar en FLAT.
+   - **Delay Effect Level / Direct Mix** (`05 06`/`05 07`, `0..120`/`0..100`): mismo patrón
+     que Booster — Effect Level cambia el volumen del delay procesado, Direct Mix cambia el
+     balance con la señal seca.
+   - **Reverb Pre Delay** (`60 00 05 43`, `0..500` ms): con la reverb sonando, subir el valor.
+     **Éxito**: se nota un hueco creciente entre el ataque de la nota y el inicio de la cola
+     de reverb.
+   - **Reverb Low Cut / High Cut** (`05 45`/`05 46`, 18/15 frecuencias): mover cada selector
+     por su rango. **Éxito**: Low Cut quita graves de la cola de reverb al subir desde FLAT;
+     High Cut quita agudos al bajar desde FLAT — direcciones de filtro opuestas, como está
+     documentado (CLAUDE.md §5.2, "FLAT es el primero" vs "FLAT es el último").
+   - **Reverb Density** (`05 47`, `0..10`): subir y bajar. **Éxito**: la cola de reverb se
+     nota más densa/continua en vez de discreta o "granulada" al subir.
+   - **Reverb Direct Mix** (`05 49`, `0..100`): mismo patrón que Effect Level de Booster —
+     cambia el balance entre señal seca y reverb.
+   - **Si algún selector de frecuencia no cambia nada audible pero tampoco rebota**: revisar
+     con un GET si el valor se guarda de verdad — el precedente de "acepta el SET pero no
+     hace nada audible" en este bloque es `60 00 05 48` (Reverb Effect Level / la vieja
+     `REVERB_LEVEL_DERIVED`), que por eso se dejó fuera del cableado en vez de arriesgarse a
+     repetir el mismo resultado sin necesidad de probarlo de nuevo.
+
+5. ⚠️ **Los dos parámetros con paso fraccionario** (`FractionalLevelScale`, CLAUDE.md §5.2),
+   implementados el 2026-09-05, pendientes de confirmar con audio. Con Edit Mode encendido:
+   - **Reverb Time** (`60 00 05 42`, `0.1..10.0` s en pasos de 0.1): en la tarjeta de Reverb,
+     mover el slider por todo el rango con la reverb sonando. **Éxito esperado**: la duración
+     de la cola de reverb cambia en incrementos perceptibles y finos — de 0.1 s en 0.1 s, no a
+     saltos bruscos de 1 s como daría una escala entera sin el paso fraccionario.
+   - **Pre Delay de 2x2 Chorus, bandas Low y High** (`60 00 02 3A`/`3E`, `0.0..40.0` ms en
+     pasos de 0.5): primero, **poner el tipo activo de Mod en 2x2 Chorus** — los sliders solo
+     aparecen en la tarjeta de Mod con ese tipo seleccionado, y con cualquier otro tipo debe
+     verse el aviso "Solo disponible con el tipo 2x2 Chorus" en su lugar. Con 2x2 Chorus
+     activo y el efecto sonando, mover cada banda por separado. **Éxito esperado**: el eco de
+     la modulación (el chorus) se adelanta o atrasa con precisión fina, de forma audible e
+     independiente entre banda Low y banda High.
+   - **Si el paso se siente "a saltos" en vez de fino**: comprobar con un GET inmediato tras
+     el SET que el crudo que vuelve es el esperado (`scale.toRaw` del valor mostrado) — si
+     coincide pero el oído no distingue los pasos finos, puede ser una limitación perceptiva
+     normal a esa escala de tiempo, no un fallo de la implementación.
+   - **Si Reverb Time no cambia nada audible pero tampoco rebota**: mismo patrón de
+     diagnóstico que el resto del bloque de Reverb — comprobar con GET si el valor se guarda.
+
+## Hallazgos de diagnóstico
+
+Bugs **investigados y reproducidos pero todavía sin arreglar**, con la evidencia que los
+sostiene. De esto depende cómo se diseña la corrección; no se toca código hasta decidirlo.
+
+### 2026-09-04 — El canal depende de Edit Mode: **no es una regresión del fix de recarga**
+
+Reportado como "antes del fix de hoy cambiar de canal funcionaba; ahora con Edit Mode apagado
+no tiene efecto y revierte al canal real". Investigado comparando el código contra `HEAD`.
+
+**No hay, ni ha habido nunca, un gate de Edit Mode en el camino de escritura.** Comprobado por
+grep sobre todo `main/`: `editMode` aparece **solo** en la pantalla y en el ViewModel que lo
+enciende; `device/` y `protocol/` no saben qué es. `onSelectorChanged` → `KatanaEnumParameter.set()`
+construye el SysEx y lo manda sin mirar nada más que el valor. El refactor de hoy no añadió
+ninguna condición: se limitó a mover *quién dispara la recarga*.
+
+**Y el camino que hace "revertir" el canal es byte a byte el mismo que antes del refactor.**
+Las dos piezas relevantes son idénticas en `HEAD` y ahora:
+
+| Pieza | Antes (`HEAD`) | Ahora |
+| --- | --- | --- |
+| Disparador de recarga | `channel.state` → `collectLatest` → `delay(300)` → `reload()` | igual, con la petición pasando por `ReloadRequest` |
+| El canal en el dump | `dump.byteAt(00 01 00 00)` = null → `missing` → `read()` | `dump.bytesAt(...)` = null → `missing` → `read()` |
+
+O sea: **antes y ahora**, escribir el canal desde la app deja la caché optimista en el valor
+nuevo, dispara una recarga 300 ms después, y esa recarga relee `00 01 00 00` con un GET de
+respaldo —porque esa dirección vive fuera del dump y siempre cae ahí— y pisa la caché con lo
+que conteste el amplificador. Si el amplificador ignoró la escritura, el selector vuelve solo.
+
+⚠️ **Entonces esto es comportamiento preexistente, no una regresión — y encaja con que nunca
+se hubiera notado**: todas las confirmaciones anteriores (canal el 2026-09-03, tipos de efecto
+y parámetros de Booster el 2026-09-04) se hicieron **con Edit Mode ya encendido**. Con edit
+mode activo el amplificador acepta la escritura y además la reporta, así que la relectura
+confirma el canal nuevo y no hay nada que ver.
+
+**Lo que el código no puede decidir**: si el amplificador exige edit mode para *aceptar* el SET
+de `00 01 00 00`. Los síntomas reportados encajan con que sí lo exige —ignora la escritura pero
+sigue contestando el GET, que es lo que permite a la app enterarse—, y CLAUDE.md ya recogía que
+`katana_sysex.txt` pide edit mode para **leer** el canal. Pero eso es una afirmación sobre el
+hardware y **necesita la prueba real**, no una lectura de código: ver "Pendiente por probar",
+punto 2, que incluye el mensaje de log exacto que lo confirmaría.
+
+**Si se confirma que el amplificador lo exige**, el contrato "cambiar de canal siempre, con o
+sin edit mode" no se puede cumplir mandando SysEx a `00 01 00 00`, y las dos salidas tienen
+coste propio: **Program Change** (§5.1) necesita una segunda ruta de empaquetado USB-MIDI que
+hoy no existe y depende del canal MIDI configurado en `00 02 00 00`; **encender edit mode para
+la escritura** altera el estado del amplificador, que §4.2 exige que sea siempre explícito y
+visible, nunca silencioso. Ninguna de las dos se ha implementado a la espera de la prueba.
+
+### 2026-09-04 — Cambiar el tipo de amplificador no recarga nada (y los Sneaky Amp no tienen bloque propio)
+
+Reportado como "cambiar Clean→Lead o Brown→MS1959 no trae parámetros del amp".
+
+**Causa inmediata, y no es una race condition:** el único disparador de recarga que existe
+observa `repository.channel.state`. Cambiar el modelo de amplificador **no cambia el canal**,
+así que **no se dispara ninguna relectura, por diseño**. No hay bug de parseo aquí: no hay
+parseo, porque no hay lectura.
+
+⚠️ **La hipótesis de que los Sneaky Amp guardan sus parámetros en otro rango no se sostiene.**
+Comprobado en `midi.xml`: existe **un único bloque PREAMP**, `60 00 00 21`–`2C`, y lo comparten
+los 30 modelos, incluidos los cinco `Var [...]` (`0x1C`–`0x20`) que son los "sneaky":
+
+| Dirección | Parámetro | midi.xml | ¿en la app? |
+| --- | --- | --- | --- |
+| `60 00 00 21` | Type (30 modelos) | 37310 | ✅ `AMP_TYPE_FULL` |
+| `60 00 00 22` | Gain | 37342 | Alias `GAIN_LEVEL_LOW`, sin usar — la alta (`06 51`) ya está confirmada y es la fuente de verdad |
+| `60 00 00 23` | *(sin nombre)* `range 00/14/-10/+10` | 37465 | Ni documentado ni implementado — no hay ninguna alta que lo cubra |
+| `60 00 00 24`–`27` | Bass · Middle · Treble · Presence | 37468–37477 | Alias `*_LEVEL_LOW`, sin usar — mismas altas confirmadas |
+| `60 00 00 28` | Volume | 37480 | Alias `VOLUME_LEVEL_LOW`, sin usar — misma alta confirmada |
+| `60 00 00 29` | Bright | 37483 | ⚠️ **implementado 2026-09-04** (`AMP_BRIGHT`), sin confirmar |
+| `60 00 00 2A` | Gain SW | 37487 | ⚠️ **implementado 2026-09-04** (`AMP_GAIN_SW`), sin confirmar |
+| `60 00 00 2B`–`2C` | Solo Sw · Solo Level | 37492–37496 | ⚠️ **implementados 2026-09-04** (`AMP_SOLO_ENABLED`/`AMP_SOLO_LEVEL`), sin confirmar |
+
+**Actualización 2026-09-04: los cuatro que faltaban ya están cableados.** Bright, Gain SW,
+Solo Sw y Solo Level tienen ahora su `KatanaControl`, su fila en `SlidersPane` (bajo el switch
+de Variación) y sus tests JVM — ver "Hecho" y "Pendiente por probar". Las direcciones "bajas"
+de Gain/Bass/Middle/Treble/Presence/Volume (`00 22`, `00 24`–`28`) **no se duplican**: siguen
+documentadas como alias sin usar, porque las altas (`06 51`–`06 56`) ya están confirmadas con
+audio y son la fuente de verdad. `60 00 00 23` sigue sin nombre y sin ninguna alta que lo
+cubra, así que queda fuera — no hay con qué contrastarlo.
+
+O sea: el amplificador es **"DSP simple"** como el Booster —un juego fijo de parámetros, el
+tipo solo cambia el modelo— y no "DSP complejo" como Mod/FX. Cambiar de tipo no mueve el mapa
+de memoria.
+
+**Todo ese bloque sí viene en el dump** (`60 00 00 2x` cae de lleno en `60 00 00 00` + 1920 B),
+así que **no hace falta ampliar el rango del GET**: los bytes ya están llegando y se están
+tirando. La app lee las perillas por las direcciones "altas" `60 00 06 51`–`56` (§5) y de este
+bloque solo registra `00 21`. Lo que falta es registrar los controles, no pedir más memoria.
+
+**Lo que queda por resolver con el amplificador delante**, porque ninguna fuente lo dice y no
+se puede deducir del XML: si al cambiar el modelo el amplificador **recalcula** los valores de
+Gain/EQ del preset (y entonces hace falta releer al cambiar de tipo, igual que al cambiar de
+canal) o los **conserva** (y entonces no hace falta releer nada, solo implementar los
+controles que faltan). Es la misma pregunta abierta que ya está anotada para los tipos de
+efecto: "si cambiar el tipo resetea los parámetros del slot o los conserva" (CLAUDE.md §5.2).
+
+**Prueba propuesta** para decidirlo, a añadir a "Pendiente por probar" cuando se ataque:
+poner Gain al 20 en Clean, cambiar a Lead desde el panel del amplificador, y mirar en la
+pantalla de diagnóstico si llega algún mensaje espontáneo por `60 00 06 51` o `60 00 00 22`.
+Si llega, el amp recalcula y hay que releer; si no llega nada, conserva y basta con cablear
+los controles.
 
 ## Por hacer
 
@@ -1135,3 +1416,38 @@ confirmarlo con audio o con el amplificador real).
     catálogos de tipos de Booster, Delay y Reverb. Comprobar la coherencia interna de la
     fuente es lo mejor disponible — y sigue sin sustituir a la prueba con audio, que está
     pendiente para todo este bloque.
+
+- **2026-09-04 — Un predicado, no una lista de direcciones, es lo que separa un trozo de
+  dump de un reporte espontáneo.** Se descartó `List<Address>` para `sendAndCollectUntilQuiet`
+  porque no se sabe de antemano cuántos trozos vendrán ni en qué bases (§4.4); pasar el rango
+  por separado también se descartó porque invitaría a que se desincronizara del propio GET.
+  Un predicado (`accept: (RolandMessage.Data) -> Boolean`) deja `protocol/` genérico y puro,
+  y `blockReplyIn(base, size)` es la única factoría que hizo falta.
+  - **Ninguna de las dos condiciones basta sola.** El rango solo no sirve: 37 de los 38
+    controles registrados viven dentro de `[60 00 00 00, +1920)`, así que casi cualquier
+    reporte espontáneo lo cumple. El tamaño solo tampoco: las respuestas de nombre de
+    dispositivo/preset son de 16 bytes, por encima del umbral de control (2) pero fuera del
+    rango del dump. Las dos en AND es lo que de verdad discrimina.
+  - **`applyDumpValue` pasó de recibir un `Int` a recibir el `MemoryDump` entero.** Antes el
+    llamador ya había extraído un solo byte con `dump.byteAt(control.address)`; ahora el
+    control lee sus propios `byteWidth` bytes con el nuevo `MemoryDump.bytesAt(address,
+    width)`, todo o nada. Sin esto el filtro de dirección+tamaño habría cerrado la vía por la
+    que el canal se corrompía, pero habría dejado la misma trampa armada para el próximo
+    control multibyte que caiga dentro del rango (Pitch Shifter/Harmonist, §5.2).
+  - **Un solo `MutableStateFlow<ReloadRequest>` conflado, no dos caminos.** La recarga de
+    conexión y el watcher de canal alimentan el mismo `collectLatest`
+    (`DebugConnectionViewModel.startReloadCoordinator`), así que una recarga en vuelo siempre
+    cancela a la anterior — es lo que de raíz impide los dos dumps simultáneos, no el `Mutex`
+    que se añadió alrededor de `loadFromDump()`. Ese `Mutex` es deliberadamente una red de
+    seguridad redundante: antes de esto no había ningún guard de concurrencia en el proyecto,
+    y un futuro tercer disparador (el cambio de tipo de amplificador, pendiente) no debería
+    poder reabrir el problema por descuido.
+  - **No se pudo probar la ViewModel directamente.** `DebugConnectionViewModel` extiende
+    `AndroidViewModel` y necesita `android.app.Application`; el proyecto no tiene Robolectric
+    (§6 mantiene la lista de dependencias corta a propósito). Los tests de regresión
+    reconstruyen la lógica de `startReloadCoordinator` contra un `KatanaRepository` real —el
+    mismo reproductor que diagnosticó el bug, ahora verificando el diseño corregido— en vez de
+    contra la ViewModel en sí. Es una limitación conocida, no una elección de diseño: el día
+    que haga falta cubrir la ViewModel con más detalle, esa pieza de coordinación es
+    candidata a subir a `device/`, donde sí se puede testear sin Android (ver la decisión
+    pendiente de alcance en la nota de diseño original).

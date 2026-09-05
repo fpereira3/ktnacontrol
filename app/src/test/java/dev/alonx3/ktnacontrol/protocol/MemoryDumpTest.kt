@@ -125,6 +125,33 @@ class MemoryDumpTest {
     }
 
     @Test
+    fun `bytesAt reads consecutive bytes for a multi-byte control`() {
+        // El canal activo es 2 bytes (CLAUDE.md §5.1); simula su GET de respaldo, que sí
+        // cubre las dos direcciones.
+        val dump = MemoryDump(
+            listOf(MemoryDump.Chunk(KatanaAddresses.ACTIVE_CHANNEL, byteArrayOf(0x00, 0x03)))
+        )
+
+        val bytes = dump.bytesAt(KatanaAddresses.ACTIVE_CHANNEL, width = 2)
+
+        assertEquals(2, bytes?.size)
+        assertEquals(0x00, bytes?.get(0)?.toInt())
+        assertEquals(0x03, bytes?.get(1)?.toInt())
+    }
+
+    @Test
+    fun `bytesAt is all-or-nothing, not a partial read`() {
+        // El escenario que este test existe para atrapar: un mensaje espontáneo de 1 byte
+        // que se cuela como si fuera parte del dump no debe decodificarse a medias como si
+        // el segundo byte fuera 0 — eso es justo lo que convertía el canal en Panel.
+        val dump = MemoryDump(
+            listOf(MemoryDump.Chunk(KatanaAddresses.ACTIVE_CHANNEL, byteArrayOf(0x03)))
+        )
+
+        assertNull(dump.bytesAt(KatanaAddresses.ACTIVE_CHANNEL, width = 2))
+    }
+
+    @Test
     fun `data bytes are unsigned, so values above 0x7F would not come back negative`() {
         // Un byte SysEx nunca pasa de 0x7F, pero si el amp mandara basura no debe leerse
         // como negativo y colarse en un rango por accidente.

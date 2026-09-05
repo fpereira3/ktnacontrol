@@ -38,6 +38,8 @@
     <string name="section_amp">Amplificador</string>
     <string name="section_effects">Efectos</string>
     <string name="section_channel">Canal</string>
+    <!-- Aviso cuando Edit Mode está apagado: el canal se puede cambiar igual, los parámetros no. -->
+    <string name="edit_mode_required">Edit Mode apagado: solo se puede cambiar de canal. Actívalo para editar parámetros.</string>
     <string name="channel_panel">Panel</string>
     <string name="channel_bank_a">A%1$d</string>
     <string name="channel_bank_b">B%1$d</string>
@@ -54,6 +56,30 @@
     <string name="booster_solo_level">Solo Level: %1$s</string>
     <string name="booster_effect_level">Effect Level: %1$s</string>
     <string name="booster_direct_mix_level">Direct Mix: %1$s</string>
+    <!-- Controles restantes del bloque PREAMP (60 00 00 21-2C), ver BACKLOG.md -->
+    <string name="amp_bright">Bright</string>
+    <string name="amp_gain_sw">Gain SW</string>
+    <string name="amp_gain_sw_low">Low</string>
+    <string name="amp_gain_sw_middle">Middle</string>
+    <string name="amp_gain_sw_high">High</string>
+    <string name="amp_solo">Solo</string>
+    <string name="amp_solo_level">Solo Level: %1$s</string>
+    <!-- Parámetros internos fijos de Delay 1 y Reverb, CLAUDE.md §5.2 -->
+    <string name="delay_time">Time: %1$s</string>
+    <string name="delay_feedback">Feedback: %1$s</string>
+    <string name="delay_high_cut">High Cut</string>
+    <string name="delay_effect_level">Effect Level: %1$s</string>
+    <string name="delay_direct_mix">Direct Mix: %1$s</string>
+    <string name="reverb_pre_delay">Pre Delay: %1$s</string>
+    <string name="reverb_low_cut">Low Cut</string>
+    <string name="reverb_high_cut">High Cut</string>
+    <string name="reverb_density">Density: %1$s</string>
+    <string name="reverb_direct_mix">Direct Mix: %1$s</string>
+    <!-- Parámetros con paso fraccionario (0.5/0.1), CLAUDE.md §5.2 -->
+    <string name="reverb_time">Time: %1$s s</string>
+    <string name="mod_chorus_pre_delay_low">2x2 Chorus Pre Delay (Low): %1$s ms</string>
+    <string name="mod_chorus_pre_delay_high">2x2 Chorus Pre Delay (High): %1$s ms</string>
+    <string name="mod_internal_params_requires_chorus">Solo disponible con el tipo 2x2 Chorus</string>
     <string name="color_green">Verde</string>
     <string name="color_red">Rojo</string>
     <string name="color_yellow">Amarillo</string>

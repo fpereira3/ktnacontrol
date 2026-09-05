@@ -11,10 +11,19 @@ import dev.alonx3.ktnacontrol.protocol.MidiBytes
 import dev.alonx3.ktnacontrol.protocol.ModFxType
 import dev.alonx3.ktnacontrol.protocol.ReverbType
 import dev.alonx3.ktnacontrol.protocol.RolandSysEx
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -1033,6 +1042,47 @@ class KatanaRepositoryTest {
     }
 
     @Test
+    fun `the remaining PREAMP controls write their own addresses`() = runBlocking {
+        // Bright/Gain SW/Solo Sw/Solo Level: 60 00 00 29-2C, el resto del bloque PREAMP que
+        // faltaba cablear (BACKLOG.md, "Cambiar el tipo de amplificador no recarga nada").
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.ampBright.set(KatanaAddresses.SWITCH_ON)
+        yield()
+        repo.ampGainSw.set(0x02)
+        yield()
+        repo.ampSoloEnabled.set(KatanaAddresses.SWITCH_ON)
+        yield()
+        repo.ampSoloLevel.setLevel(100)
+        delay(debounce * 3)
+
+        assertEquals(
+            listOf(
+                "F0 41 00 00 00 00 33 12 60 00 00 29 01 76 F7",
+                "F0 41 00 00 00 00 33 12 60 00 00 2A 02 74 F7",
+                "F0 41 00 00 00 00 33 12 60 00 00 2B 01 74 F7",
+                "F0 41 00 00 00 00 33 12 60 00 00 2C 64 10 F7",
+            ),
+            List(link.sent.size) { index -> link.hex(index) },
+        )
+        repo.close()
+    }
+
+    @Test
+    fun `AMP_GAIN_SW rejects a value outside its three positions`() = runBlocking {
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.ampGainSw.set(0x03)
+        yield()
+
+        assertTrue("un valor fuera de Low/Middle/High no debe salir al cable", link.sent.isEmpty())
+        assertNull(repo.ampGainSw.state.value)
+        repo.close()
+    }
+
+    @Test
     fun `booster internal parameters do not take each other's messages, or the type or level`() = runBlocking {
         // 00 11 (tipo), 00 12-18 (internos) y 06 57 (perilla) son direcciones distintas y
         // adyacentes: un error de un byte al cablear cualquiera caería aquí.
@@ -1139,4 +1189,449 @@ class KatanaRepositoryTest {
         yield()
         assertEquals("ya no debe escuchar", 88, repo.reverbLevel.state.value)
     }
+
+    @Test
+    fun `writing a control never depends on anything but the value itself`() = runBlocking {
+        // Contrato de Edit Mode (CLAUDE.md §4.2): quién puede editar lo decide la **UI**, no
+        // `device/`. Aquí no existe el concepto de edit mode y no debe existir: el cambio de
+        // canal tiene que salir al cable siempre, y meter un gate en esta capa lo rompería
+        // sin que la pantalla se enterara. Este test falla si alguien lo intenta.
+        val link = FakeLink()
+        val repo = repository(link, this)
+        yield()
+
+        repo.channel.set(3)
+        delay(debounce * 3)
+
+        assertEquals("el SET del canal debe salir sin condiciones", 1, link.sent.size)
+        assertEquals(
+            "F0 41 00 00 00 00 33 12 00 01 00 00 00 03 7C F7",
+            link.hex(),
+        )
+        repo.close()
+    }
+
+    // --- El bug de recarga al cambiar de canal (BACKLOG.md, "El estado se desincroniza al
+    // cambiar de canal rápido") -----------------------------------------------------------
+
+    /** Responde cualquier GET con ceros del tamaño pedido — sirve tanto para el dump como
+     * para cualquier GET de respaldo, así que nada se queda esperando una respuesta que
+     * nunca llega. */
+    private fun genericGetEcho(message: ByteArray): ByteArray? {
+        val bytes = message.map { it.toInt() and 0xFF }
+        if (bytes.size < 18 || bytes[7] != RolandSysEx.COMMAND_GET) return null
+        val address = Address(bytes[8], bytes[9], bytes[10], bytes[11])
+        val size = MidiBytes.decode(
+            byteArrayOf(bytes[12].toByte(), bytes[13].toByte(), bytes[14].toByte(), bytes[15].toByte())
+        )
+        return RolandSysEx.set(address, ByteArray(size))
+    }
+
+    @Test
+    fun `loadFromDump rejects a spontaneous channel report instead of letting it corrupt the dump`() =
+        runBlocking {
+            val link = FakeLink(answer = ::genericGetEcho)
+            val repo = repository(link, this)
+
+            launch {
+                delay(50) // llega mientras la ventana de silencio del dump sigue abierta
+                link.receive(RolandSysEx.set(KatanaAddresses.ACTIVE_CHANNEL, MidiBytes.encode(1, 2)))
+            }
+
+            val load = repo.loadFromDump()
+
+            assertEquals(
+                "el reporte espontáneo debe quedar registrado como rechazado, no colado en el dump",
+                1,
+                load.rejectedDuringWindow[KatanaAddresses.ACTIVE_CHANNEL],
+            )
+            // El GET de respaldo —contestado por el mismo eco genérico, con 0— es el que
+            // manda al final, no el "1" espurio que llegó durante la ventana del dump.
+            assertEquals(0, repo.channel.state.value)
+            repo.close()
+        }
+
+    /**
+     * Como [FakeLink], pero contesta cada GET **con retraso**, desde una corrutina propia:
+     * lo que hace falta para que un cambio de canal pueda solaparse de verdad con un dump
+     * que sigue en vuelo, en vez de que todo se resuelva en el mismo tick.
+     */
+    private class DelayedFakeLink(
+        private val scope: CoroutineScope,
+        private val replyDelayMs: Long,
+    ) : KatanaLink {
+        private val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 256)
+        override val incoming: Flow<ByteArray> = messages
+        val dumpRequests = AtomicInteger(0)
+
+        /**
+         * El canal "real" del amplificador falso. Sin esto, el GET de respaldo del canal
+         * —que dispara todo `loadFromDump`, porque `00 01 00 00` no vive en el dump— se
+         * contestaría con ceros y pisaría el reporte espontáneo que se acaba de simular,
+         * en vez de confirmarlo como haría el amplificador real.
+         */
+        private var currentChannel = 0
+
+        override suspend fun send(message: ByteArray): Boolean {
+            val bytes = message.map { it.toInt() and 0xFF }
+            if (bytes.size >= 18 && bytes[7] == RolandSysEx.COMMAND_GET) {
+                val address = Address(bytes[8], bytes[9], bytes[10], bytes[11])
+                val size = MidiBytes.decode(
+                    byteArrayOf(
+                        bytes[12].toByte(), bytes[13].toByte(), bytes[14].toByte(), bytes[15].toByte()
+                    )
+                )
+                if (address == KatanaAddresses.MEMORY_DUMP) dumpRequests.incrementAndGet()
+                val reply = if (address == KatanaAddresses.ACTIVE_CHANNEL) {
+                    RolandSysEx.set(address, MidiBytes.encode(currentChannel, size))
+                } else {
+                    RolandSysEx.set(address, ByteArray(size))
+                }
+                scope.launch {
+                    delay(replyDelayMs)
+                    messages.emit(reply)
+                }
+            }
+            return true
+        }
+
+        suspend fun reportChannel(channel: Int) {
+            currentChannel = channel
+            messages.emit(RolandSysEx.set(KatanaAddresses.ACTIVE_CHANNEL, MidiBytes.encode(channel, 2)))
+        }
+    }
+
+    /**
+     * Reconstruye la lógica de `DebugConnectionViewModel.startReloadCoordinator` —único
+     * disparador de recarga, `collectLatest`, margen, mutex, guard revalidado después del
+     * margen— contra el [KatanaRepository] real.
+     *
+     * No se prueba la ViewModel directamente porque necesita `android.app.Application` y este
+     * proyecto no tiene Robolectric (CLAUDE.md §6 mantiene la lista de dependencias corta).
+     * Esto es el mismo reproductor que diagnosticó el bug, ahora contra el diseño corregido.
+     */
+    private fun CoroutineScope.startTestReloadCoordinator(
+        repository: KatanaRepository,
+        settleMillis: Long,
+        inFlight: AtomicInteger,
+        maxInFlight: AtomicInteger,
+        onReload: (channel: Int?) -> Unit = {},
+    ): Job {
+        val mutex = Mutex()
+        var loadedChannel: Int? = null
+        val requests = MutableStateFlow<Int?>(null) // null = recarga de conexión
+
+        suspend fun reload() {
+            val now = inFlight.incrementAndGet()
+            maxInFlight.updateAndGet { current -> maxOf(current, now) }
+            try {
+                repository.loadFromDump()
+                loadedChannel = repository.channel.state.value
+                onReload(loadedChannel)
+            } finally {
+                inFlight.decrementAndGet()
+            }
+        }
+
+        return launch {
+            launch {
+                repository.channel.state.filterNotNull().collect { channel -> requests.value = channel }
+            }
+            requests.collectLatest { channel ->
+                if (channel != null) {
+                    if (channel == loadedChannel) return@collectLatest
+                    delay(settleMillis)
+                    if (channel == loadedChannel) return@collectLatest
+                }
+                mutex.withLock { reload() }
+            }
+        }
+    }
+
+    @Test
+    fun `regression - three rapid channel changes trigger one reload, for the last channel`() = runBlocking {
+        val link = DelayedFakeLink(this, replyDelayMs = 5L)
+        val repo = repository(link, this)
+        val inFlight = AtomicInteger(0)
+        val maxInFlight = AtomicInteger(0)
+        var loadedChannel: Int? = null
+
+        val coordinator = startTestReloadCoordinator(repo, settleMillis = 60L, inFlight, maxInFlight) {
+            loadedChannel = it
+        }
+
+        delay(400) // deja terminar del todo la recarga de conexión antes de tocar el canal
+        link.reportChannel(1); delay(30)
+        link.reportChannel(2); delay(30)
+        link.reportChannel(3)
+
+        delay(600)
+
+        assertEquals(
+            "un dump para la conexión + uno para el tramo 1A→2A→3A coalescido, no tres",
+            2,
+            link.dumpRequests.get(),
+        )
+        assertEquals(3, repo.channel.state.value)
+        assertEquals(3, loadedChannel)
+
+        coordinator.cancel()
+        repo.close()
+    }
+
+    @Test
+    fun `regression - at most one dump is ever in flight, even racing the connection reload`() = runBlocking {
+        // Retraso grande a propósito: la recarga de conexión sigue en vuelo cuando el canal
+        // cambia, que es justo el escenario que antes producía dos dumps simultáneos.
+        val link = DelayedFakeLink(this, replyDelayMs = 200L)
+        val repo = repository(link, this)
+        val inFlight = AtomicInteger(0)
+        val maxInFlight = AtomicInteger(0)
+        var loadedChannel: Int? = null
+
+        val coordinator = startTestReloadCoordinator(repo, settleMillis = 60L, inFlight, maxInFlight) {
+            loadedChannel = it
+        }
+
+        delay(20) // la recarga de conexión todavía no ha recibido su respuesta
+        link.reportChannel(3)
+
+        delay(800)
+
+        assertEquals("nunca deben coincidir dos dumps en vuelo", 1, maxInFlight.get())
+        assertEquals(3, repo.channel.state.value)
+        assertEquals(3, loadedChannel)
+
+        coordinator.cancel()
+        repo.close()
+    }
+
+    // --- Parámetros internos fijos de Delay 1 y Reverb (CLAUDE.md §5.2) --------------------
+    //
+    // ⚠️ Sin confirmar contra el amplificador. Estos tests comprueban el contrato de cada
+    // control —dirección, escala, byteWidth y rechazo de los selectores de frecuencia—, no que
+    // el amp obedezca. Los checksums están calculados, no escritos a mano (ver CLAUDE.md, la
+    // reverb costó tres candidatas por confiar demasiado en cálculos manuales).
+
+    @Test
+    fun `delay time writes 2 bytes at its own address`() = runBlocking {
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.delayTime.setLevel(1500)
+        delay(debounce * 3)
+
+        assertEquals("F0 41 00 00 00 00 33 12 60 00 05 02 0B 5C 32 F7", link.hex())
+        repo.close()
+    }
+
+    @Test
+    fun `delay feedback, effect level and direct mix write their own addresses`() = runBlocking {
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.delayFeedback.setLevel(50)
+        delay(debounce * 2)
+        repo.delayEffectLevel.setLevel(90)
+        delay(debounce * 2)
+        repo.delayDirectMix.setLevel(75)
+        delay(debounce * 2)
+
+        assertEquals(
+            listOf(
+                "F0 41 00 00 00 00 33 12 60 00 05 04 32 65 F7",
+                "F0 41 00 00 00 00 33 12 60 00 05 06 5A 3B F7",
+                "F0 41 00 00 00 00 33 12 60 00 05 07 4B 49 F7",
+            ),
+            List(link.sent.size) { index -> link.hex(index) },
+        )
+        repo.close()
+    }
+
+    @Test
+    fun `delay high cut writes its address and rejects a value outside the 15 frequencies`() =
+        runBlocking {
+            val link = FakeLink()
+            val repo = repository(link, this)
+
+            repo.delayHighCut.set(0x05)
+            yield()
+            assertEquals("F0 41 00 00 00 00 33 12 60 00 05 05 05 11 F7", link.hex())
+
+            repo.delayHighCut.set(0x0F)
+            yield()
+            assertEquals("un valor fuera del catálogo no debe salir al cable", 1, link.sent.size)
+            assertEquals("la caché se queda con el último valor aceptado", 0x05, repo.delayHighCut.state.value)
+
+            repo.close()
+        }
+
+    @Test
+    fun `reverb pre delay writes 2 bytes at its own address`() = runBlocking {
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.reverbPreDelay.setLevel(250)
+        delay(debounce * 3)
+
+        assertEquals("F0 41 00 00 00 00 33 12 60 00 05 43 01 7A 5D F7", link.hex())
+        repo.close()
+    }
+
+    @Test
+    fun `reverb density and direct mix write their own addresses`() = runBlocking {
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.reverbDensity.setLevel(7)
+        delay(debounce * 2)
+        repo.reverbDirectMix.setLevel(60)
+        delay(debounce * 2)
+
+        assertEquals(
+            listOf(
+                "F0 41 00 00 00 00 33 12 60 00 05 47 07 4D F7",
+                "F0 41 00 00 00 00 33 12 60 00 05 49 3C 16 F7",
+            ),
+            List(link.sent.size) { index -> link.hex(index) },
+        )
+        repo.close()
+    }
+
+    @Test
+    fun `reverb low cut writes its address and rejects a value outside the 18 frequencies`() =
+        runBlocking {
+            val link = FakeLink()
+            val repo = repository(link, this)
+
+            repo.reverbLowCut.set(0x05)
+            yield()
+            assertEquals("F0 41 00 00 00 00 33 12 60 00 05 45 05 51 F7", link.hex())
+
+            repo.reverbLowCut.set(0x12)
+            yield()
+            assertEquals("un valor fuera del catálogo no debe salir al cable", 1, link.sent.size)
+
+            repo.close()
+        }
+
+    @Test
+    fun `reverb high cut writes its address and rejects a value outside the 15 frequencies`() =
+        runBlocking {
+            val link = FakeLink()
+            val repo = repository(link, this)
+
+            repo.reverbHighCut.set(0x05)
+            yield()
+            assertEquals("F0 41 00 00 00 00 33 12 60 00 05 46 05 50 F7", link.hex())
+
+            repo.reverbHighCut.set(0x0F)
+            yield()
+            assertEquals("un valor fuera del catálogo no debe salir al cable", 1, link.sent.size)
+
+            repo.close()
+        }
+
+    @Test
+    fun `delay and reverb internal parameters do not take each other's messages`() = runBlocking {
+        // 05 02-07 (delay) y 05 40-49 (reverb) son bloques adyacentes en la misma LSB `05`: un
+        // desplazamiento de un byte al cablear cualquiera de los dos caería aquí.
+        val link = FakeLink()
+        val repo = repository(link, this)
+        yield()
+
+        link.receive(levelReply(50, KatanaAddresses.DELAY_FEEDBACK))
+        yield()
+
+        assertEquals(50, repo.delayFeedback.state.value)
+        assertNull("effect level no debe moverse", repo.delayEffectLevel.state.value)
+        assertNull("direct mix de delay no debe moverse", repo.delayDirectMix.state.value)
+        assertNull("density de reverb no debe moverse", repo.reverbDensity.state.value)
+        assertNull("direct mix de reverb no debe moverse", repo.reverbDirectMix.state.value)
+        repo.close()
+    }
+
+    // --- Parámetros con paso fraccionario (CLAUDE.md §5.2) ---------------------------------
+    //
+    // ⚠️ Sin confirmar contra el amplificador. `KatanaFractionalParameter` es el primer control
+    // de este repositorio cuyo `displayValue`/`setLevel` trabajan en `Double`, no en `Int`.
+
+    @Test
+    fun `reverb time writes its own address, in raw bytes derived from the display seconds`() =
+        runBlocking {
+            val link = FakeLink()
+            val repo = repository(link, this)
+
+            repo.reverbTime.setLevel(5.1)
+            delay(debounce * 3)
+
+            assertEquals("F0 41 00 00 00 00 33 12 60 00 05 42 32 27 F7", link.hex())
+            repo.close()
+        }
+
+    @Test
+    fun `mod chorus pre delay low and high write their own addresses`() = runBlocking {
+        val link = FakeLink()
+        val repo = repository(link, this)
+
+        repo.modChorusPreDelayLow.setLevel(20.0)
+        delay(debounce * 2)
+        repo.modChorusPreDelayHigh.setLevel(10.0)
+        delay(debounce * 2)
+
+        assertEquals(
+            listOf(
+                "F0 41 00 00 00 00 33 12 60 00 02 3A 28 3C F7",
+                "F0 41 00 00 00 00 33 12 60 00 02 3E 14 4C F7",
+            ),
+            List(link.sent.size) { index -> link.hex(index) },
+        )
+        repo.close()
+    }
+
+    @Test
+    fun `fractional parameters clamp instead of rejecting, like every continuous level`() =
+        runBlocking {
+            val link = FakeLink()
+            val repo = repository(link, this)
+
+            repo.reverbTime.setLevel(-5.0)
+            delay(debounce * 2)
+            repo.modChorusPreDelayLow.setLevel(999.0)
+            delay(debounce * 2)
+
+            assertEquals(0.1, repo.reverbTime.displayValue!!, 0.0)
+            assertEquals(40.0, repo.modChorusPreDelayLow.displayValue!!, 0.0)
+            repo.close()
+        }
+
+    @Test
+    fun `reading reverb time queries its address and converts the reply to seconds`() =
+        runBlocking {
+            val link = FakeLink(answer = { levelReply(50, KatanaAddresses.REVERB_TIME) })
+            val repo = repository(link, this)
+
+            assertEquals(5.1, repo.reverbTime.read()!!.let(repo.reverbTime.scale::toDisplay), 0.0)
+            repo.close()
+        }
+
+    @Test
+    fun `fractional parameters do not take each other's messages, or the neighbouring blocks`() =
+        runBlocking {
+            // 05 42 (reverb time) está pegado a 05 41 (tipo de reverb) y 05 43 (pre delay,
+            // 2 bytes); 02 3A/3E (chorus pre delay) están dentro del bloque de 2x2 Chorus.
+            val link = FakeLink()
+            val repo = repository(link, this)
+            yield()
+
+            link.receive(levelReply(30, KatanaAddresses.REVERB_TIME))
+            yield()
+
+            assertEquals(30, repo.reverbTime.state.value)
+            assertNull("tipo de reverb no debe moverse", repo.reverbTypeActive.state.value)
+            assertNull("pre delay de reverb no debe moverse", repo.reverbPreDelay.state.value)
+            assertNull("chorus pre delay low no debe moverse", repo.modChorusPreDelayLow.state.value)
+            assertNull("chorus pre delay high no debe moverse", repo.modChorusPreDelayHigh.state.value)
+            repo.close()
+        }
 }

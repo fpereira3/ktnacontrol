@@ -66,6 +66,49 @@ const val DEFAULT_COLLECT_TIMEOUT_MS = 3_000L
 private const val QUIET_POLL_MS = 25L
 
 /**
+ * El payload más grande que puede tener la lectura o el reporte espontáneo de **un**
+ * control: el canal activo es el único de 2 bytes (CLAUDE.md §5.1), todo lo demás es 1.
+ * Refleja el mismo umbral que ya usa `KatanaRepository.onIncoming`, invertido
+ * (`data.data.size !in 1..2`) — los dos consumidores del stream parten el mismo tráfico con
+ * el mismo criterio.
+ */
+const val MAX_CONTROL_PAYLOAD = 2
+
+/**
+ * Lo que dejó [sendAndCollectUntilQuiet] al terminar: los mensajes que sí eran parte de lo
+ * pedido, y las direcciones de los que no.
+ *
+ * [rejected] existe para diagnóstico —un resumen agrupado, no una entrada por mensaje— y
+ * [invalidCount] para lo que ni siquiera se pudo parsear como Roland.
+ */
+data class QuietCollection(
+    /** Lo que sí es respuesta a lo pedido, ya parseado. */
+    val accepted: List<RolandMessage.Data>,
+    /** Direcciones de mensajes bien formados que [accept] rechazó, uno por mensaje visto. */
+    val rejected: List<Address>,
+    /** Mensajes que no se pudieron parsear en absoluto — cabecera, checksum, etc. */
+    val invalidCount: Int = 0,
+)
+
+/**
+ * Acepta solo mensajes Roland que parezcan un trozo del dump de memoria pedido con [base] y
+ * [size]: dentro del rango pedido, y demasiado grandes para ser el reporte de un solo
+ * control.
+ *
+ * Ninguna de las dos condiciones basta por sí sola (BACKLOG.md, "Propuesta de diseño:
+ * filtrado del dump y serialización de recargas"): **37 de los 38 controles registrados**
+ * viven dentro de `[60 00 00 00, +1920)`, así que el rango solo deja pasar casi cualquier
+ * reporte espontáneo — una perilla, un color, un tipo de efecto. Y el tamaño solo tragaría
+ * las respuestas de 16 bytes del nombre de dispositivo/preset si alguna vez se solaparan con
+ * un dump. Las dos juntas es lo que de verdad distingue un trozo de dump de cualquier otra
+ * cosa que pase por el cable.
+ */
+fun blockReplyIn(base: Address, size: Int): (RolandMessage.Data) -> Boolean = { data ->
+    val offset = data.address - base
+    offset >= 0 && offset < size && data.data.size > MAX_CONTROL_PAYLOAD
+}
+
+/**
  * Envía y recoge una respuesta de **varios mensajes**, terminando en cuanto el amplificador
  * se calla en vez de esperar siempre una ventana fija.
  *
@@ -78,39 +121,56 @@ private const val QUIET_POLL_MS = 25L
  * sin nada nuevo. El hueco observado entre mensajes es de ~30 ms, así que 250 ms es un
  * margen de ocho veces.
  *
+ * ⚠️ **El silencio se mide solo sobre lo aceptado.** Un mensaje que [accept] rechaza —un
+ * reporte espontáneo que llegó mientras el dump estaba en vuelo, por ejemplo un cambio de
+ * canal— **no reinicia el contador**. Antes de este filtro sí lo hacía, y era la causa
+ * directa de que la ventana se estirara hasta [timeoutMillis] cada vez que algo se movía
+ * durante la recogida (BACKLOG.md, "El estado se desincroniza al cambiar de canal rápido").
+ *
  * [timeoutMillis] es el tope absoluto, para cuando no llega nada en absoluto.
  *
  * Se suscribe con [CoroutineStart.UNDISPATCHED] antes de [send] por lo mismo que
  * [awaitRolandReply], y necesita igualmente un stream **compartido**.
  *
- * @return los mensajes vistos, en orden de llegada; vacío si no llegó ninguno.
+ * @param accept decide si un mensaje bien formado es parte de lo pedido; por defecto acepta
+ *   todo, que es el comportamiento de antes de este filtro. [blockReplyIn] da el predicado
+ *   que sí distingue un dump.
  */
 suspend fun sendAndCollectUntilQuiet(
     messages: Flow<ByteArray>,
+    accept: (RolandMessage.Data) -> Boolean = { true },
     quietMillis: Long = DEFAULT_QUIET_MS,
     timeoutMillis: Long = DEFAULT_COLLECT_TIMEOUT_MS,
     send: suspend () -> Unit,
-): List<ByteArray> = coroutineScope {
-    val collected = ArrayList<ByteArray>()
+): QuietCollection = coroutineScope {
+    val accepted = ArrayList<RolandMessage.Data>()
+    val rejected = ArrayList<Address>()
+    var invalidCount = 0
     val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
-        messages.collect { message -> collected.add(message) }
+        messages.collect { raw ->
+            when (val parsed = RolandSysEx.parse(raw)) {
+                is RolandMessage.Data ->
+                    if (accept(parsed)) accepted.add(parsed) else rejected.add(parsed.address)
+                is RolandMessage.Invalid -> invalidCount++
+            }
+        }
     }
     send()
     withTimeoutOrNull(timeoutMillis) {
         var seen = -1
         var quietFor = 0L
-        while (quietFor < quietMillis || collected.isEmpty()) {
+        while (quietFor < quietMillis || accepted.isEmpty()) {
             delay(QUIET_POLL_MS)
-            if (collected.size == seen) {
+            if (accepted.size == seen) {
                 quietFor += QUIET_POLL_MS
             } else {
-                seen = collected.size
+                seen = accepted.size
                 quietFor = 0L
             }
         }
     }
     watcher.cancel()
-    collected
+    QuietCollection(accepted, rejected, invalidCount)
 }
 
 /**

@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -25,6 +26,10 @@ class RolandExchangeTest {
     /** A reply carrying [text] padded to 16 bytes, the way the amp answers a name query. */
     private fun nameReply(address: Address, text: String): ByteArray =
         RolandSysEx.set(address, text.padEnd(16).toByteArray(Charsets.US_ASCII))
+
+    /** A reply whose payload is [size] bytes, the way a dump chunk looks on the wire. */
+    private fun chunkReply(address: Address, size: Int): ByteArray =
+        RolandSysEx.set(address, ByteArray(size))
 
     private fun RolandMessage.Data.text(): String =
         String(data, Charsets.US_ASCII).trim()
@@ -150,6 +155,9 @@ class RolandExchangeTest {
 
     // --- sendAndCollectUntilQuiet ------------------------------------------------------
 
+    /** Una dirección alta cualquiera, fuera del rango del "dump" que usan estos tests. */
+    private val chunkBase = Address(0x60, 0x00, 0x00, 0x00)
+
     @Test
     fun `collecting stops as soon as the amp goes quiet`() = runBlocking {
         val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 16)
@@ -162,13 +170,13 @@ class RolandExchangeTest {
         ) {
             // Tres mensajes seguidos, como los trozos del dump.
             repeat(3) { index ->
-                messages.emit(byteArrayOf(0xF0.toByte(), index.toByte(), 0xF7.toByte()))
+                messages.emit(chunkReply(chunkBase + index * 10, size = 10))
                 delay(20)
             }
         }
         val elapsed = System.currentTimeMillis() - started
 
-        assertEquals(3, collected.size)
+        assertEquals(3, collected.accepted.size)
         assertTrue("debe cortar por silencio, no agotar los 5 s (tardó $elapsed ms)", elapsed < 2_000)
     }
 
@@ -182,7 +190,9 @@ class RolandExchangeTest {
             timeoutMillis = 200L,
         ) { /* no se envía nada */ }
 
-        assertTrue("sin respuesta debe devolver vacío, no colgarse", collected.isEmpty())
+        assertTrue("sin respuesta debe devolver vacío, no colgarse", collected.accepted.isEmpty())
+        assertTrue(collected.rejected.isEmpty())
+        assertEquals(0, collected.invalidCount)
     }
 
     @Test
@@ -194,11 +204,117 @@ class RolandExchangeTest {
             quietMillis = 300L,
             timeoutMillis = 5_000L,
         ) {
-            messages.emit(byteArrayOf(0x01))
+            messages.emit(chunkReply(chunkBase, size = 10))
             delay(150) // menos que el silencio: la recogida sigue abierta
-            messages.emit(byteArrayOf(0x02))
+            messages.emit(chunkReply(chunkBase + 10, size = 10))
         }
 
-        assertEquals(2, collected.size)
+        assertEquals(2, collected.accepted.size)
+    }
+
+    @Test
+    fun `a message the predicate rejects is reported, not silently dropped`() = runBlocking {
+        val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
+        val outsider = Address(0x00, 0x01, 0x00, 0x00) // el canal activo, fuera del "dump"
+
+        val collected = sendAndCollectUntilQuiet(
+            messages = messages,
+            accept = blockReplyIn(chunkBase, size = 100),
+            quietMillis = 150L,
+            timeoutMillis = 5_000L,
+        ) {
+            messages.emit(chunkReply(chunkBase, size = 10))
+            messages.emit(RolandSysEx.set(outsider, byteArrayOf(0x03))) // reporte espontáneo
+        }
+
+        assertEquals(1, collected.accepted.size)
+        assertEquals(listOf(outsider), collected.rejected)
+    }
+
+    @Test
+    fun `a rejected message does not reset the quiet counter`() = runBlocking {
+        val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 16)
+        val outsider = Address(0x00, 0x01, 0x00, 0x00)
+        val started = System.currentTimeMillis()
+
+        // Antes de este filtro, cualquier mensaje reiniciaba el contador de silencio y la
+        // ventana se estiraba hasta el tope absoluto. Aquí el tope es deliberadamente enorme
+        // para que la aserción de tiempo demuestre que el rechazo no lo activó.
+        val collected = sendAndCollectUntilQuiet(
+            messages = messages,
+            accept = blockReplyIn(chunkBase, size = 100),
+            quietMillis = 150L,
+            timeoutMillis = 10_000L,
+        ) {
+            messages.emit(chunkReply(chunkBase, size = 10))
+            delay(50)
+            // Un intruso llega bien entrado el silencio; no debe reabrir la ventana.
+            repeat(4) {
+                delay(60)
+                messages.emit(RolandSysEx.set(outsider, byteArrayOf(0x03)))
+            }
+        }
+        val elapsed = System.currentTimeMillis() - started
+
+        assertEquals(1, collected.accepted.size)
+        assertEquals(4, collected.rejected.size)
+        assertTrue(
+            "el rechazo no debe reiniciar el silencio (tardó $elapsed ms)",
+            elapsed < 5_000,
+        )
+    }
+
+    @Test
+    fun `messages that cannot even be parsed are counted separately`() = runBlocking {
+        val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
+
+        val collected = sendAndCollectUntilQuiet(
+            messages = messages,
+            quietMillis = 100L,
+            timeoutMillis = 5_000L,
+        ) {
+            messages.emit(chunkReply(chunkBase, size = 10))
+            messages.emit(byteArrayOf(0xF0.toByte(), 0x00, 0xF7.toByte())) // demasiado corto
+        }
+
+        assertEquals(1, collected.accepted.size)
+        assertTrue(collected.rejected.isEmpty())
+        assertEquals(1, collected.invalidCount)
+    }
+
+    // --- blockReplyIn -------------------------------------------------------------------
+
+    @Test
+    fun `blockReplyIn accepts only addresses inside the range with a block-sized payload`() {
+        val accept = blockReplyIn(chunkBase, size = 100)
+
+        val inRangeBlock = RolandMessage.Data(chunkBase + 50, ByteArray(10))
+        val inRangeControlReport = RolandMessage.Data(chunkBase + 50, byteArrayOf(0x01))
+        val outsideRange = RolandMessage.Data(chunkBase + 200, ByteArray(10))
+        val atTheEdge = RolandMessage.Data(chunkBase + 99, ByteArray(1))
+        val justPastTheEdge = RolandMessage.Data(chunkBase + 100, ByteArray(10))
+
+        assertTrue("dentro del rango y de sobra para ser un trozo", accept(inRangeBlock))
+        assertFalse(
+            "dentro del rango pero es un reporte de 1 byte, no un trozo",
+            accept(inRangeControlReport),
+        )
+        assertFalse("fuera del rango pedido", accept(outsideRange))
+        assertFalse(
+            "dentro del rango pero de 1 byte: sigue siendo un reporte, no un trozo",
+            accept(atTheEdge),
+        )
+        assertFalse("justo fuera del rango pedido", accept(justPastTheEdge))
+    }
+
+    @Test
+    fun `blockReplyIn rejects a 2-byte control report even though it is inside the range`() {
+        // El canal activo tiene 2 bytes (CLAUDE.md §5.1); si algún día una dirección de
+        // 2 bytes cayera dentro de un rango de dump, MAX_CONTROL_PAYLOAD debe seguir
+        // distinguiéndola de un trozo real.
+        val accept = blockReplyIn(chunkBase, size = 100)
+        val twoByteReport = RolandMessage.Data(chunkBase + 10, byteArrayOf(0x01, 0x02))
+
+        assertFalse(accept(twoByteReport))
     }
 }

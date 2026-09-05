@@ -5,15 +5,20 @@ import dev.alonx3.ktnacontrol.protocol.Address
 import dev.alonx3.ktnacontrol.protocol.AmpCategory
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.BoostType
+import dev.alonx3.ktnacontrol.protocol.DelayHighCutFrequency
 import dev.alonx3.ktnacontrol.protocol.DelayType
 import dev.alonx3.ktnacontrol.protocol.EffectColor
+import dev.alonx3.ktnacontrol.protocol.FractionalLevelScale
 import dev.alonx3.ktnacontrol.protocol.LevelScale
 import dev.alonx3.ktnacontrol.protocol.MemoryDump
 import dev.alonx3.ktnacontrol.protocol.ModFxType
+import dev.alonx3.ktnacontrol.protocol.ReverbHighCutFrequency
+import dev.alonx3.ktnacontrol.protocol.ReverbLowCutFrequency
 import dev.alonx3.ktnacontrol.protocol.ReverbType
 import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
 import dev.alonx3.ktnacontrol.protocol.RolandMessage
 import dev.alonx3.ktnacontrol.protocol.RolandSysEx
+import dev.alonx3.ktnacontrol.protocol.blockReplyIn
 import dev.alonx3.ktnacontrol.protocol.sendAndCollectUntilQuiet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -214,36 +219,141 @@ class KatanaRepository(
 
     // --- Parámetros internos de Booster (CLAUDE.md §5.2) -----------------------------------
     //
-    // ⚠️ Implementados, pendientes de confirmar con audio. Custom Type y sus cinco
-    // parámetros (`60 00 00 19`–`1E`) quedan fuera a propósito: es el modo "pedal custom",
-    // menos prioritario, con su propio sub-catálogo — ver KatanaAddresses.
+    // ✅ Confirmados con audio (2026-09-04). Custom Type y sus cinco parámetros
+    // (`60 00 00 19`–`1E`) quedan fuera a propósito: es el modo "pedal custom", menos
+    // prioritario, con su propio sub-catálogo — ver KatanaAddresses.
 
-    /** ⚠️ Drive de Booster, `60 00 00 12`, `0..120`. **Sin confirmar.** */
+    /** ✅ Drive de Booster, `60 00 00 12`, `0..120`. Confirmado con audio. */
     val boostDrive: KatanaParameter =
         parameter(KatanaAddresses.BOOST_DRIVE, KatanaAddresses.BOOST_DRIVE_SCALE)
 
-    /** ⚠️ Bottom de Booster, `60 00 00 13`, `-50..+50`. **Sin confirmar.** */
+    /** ✅ Bottom de Booster, `60 00 00 13`, `-50..+50`. Confirmado con audio. */
     val boostBottom: KatanaParameter =
         parameter(KatanaAddresses.BOOST_BOTTOM, KatanaAddresses.CENTERED_TRIM_SCALE)
 
-    /** ⚠️ Tone de Booster, `60 00 00 14`, `-50..+50`. **Sin confirmar.** */
+    /** ✅ Tone de Booster, `60 00 00 14`, `-50..+50`. Confirmado con audio. */
     val boostTone: KatanaParameter =
         parameter(KatanaAddresses.BOOST_TONE, KatanaAddresses.CENTERED_TRIM_SCALE)
 
-    /** ⚠️ Solo Sw de Booster, `60 00 00 15`. **Sin confirmar.** */
+    /** ✅ Solo Sw de Booster, `60 00 00 15`. Confirmado con audio. */
     val boostSoloEnabled: KatanaEnumParameter = switch(KatanaAddresses.BOOST_SOLO_ENABLED)
 
-    /** ⚠️ Solo Level de Booster, `60 00 00 16`, `0..100`. **Sin confirmar.** */
+    /** ✅ Solo Level de Booster, `60 00 00 16`, `0..100`. Confirmado con audio. */
     val boostSoloLevel: KatanaParameter =
         parameter(KatanaAddresses.BOOST_SOLO_LEVEL, KatanaAddresses.PANEL_LEVEL_SCALE)
 
-    /** ⚠️ Effect Level de Booster, `60 00 00 17`, `0..100`. **Sin confirmar.** */
+    /** ✅ Effect Level de Booster, `60 00 00 17`, `0..100`. Confirmado con audio. */
     val boostEffectLevel: KatanaParameter =
         parameter(KatanaAddresses.BOOST_EFFECT_LEVEL, KatanaAddresses.PANEL_LEVEL_SCALE)
 
-    /** ⚠️ Direct Mix de Booster, `60 00 00 18`, `0..100`. **Sin confirmar.** */
+    /** ✅ Direct Mix de Booster, `60 00 00 18`, `0..100`. Confirmado con audio. */
     val boostDirectMix: KatanaParameter =
         parameter(KatanaAddresses.BOOST_DIRECT_MIX, KatanaAddresses.PANEL_LEVEL_SCALE)
+
+    // --- Controles restantes del bloque PREAMP (60 00 00 21-2C, CLAUDE.md / BACKLOG.md
+    // "Cambiar el tipo de amplificador no recarga nada") -------------------------------------
+    //
+    // ⚠️ Implementados, pendientes de confirmar con audio. Ya vienen en el dump —el rango
+    // `60 00 00 2x` cae dentro de `60 00 00 00` + 1920 B— así que esto es solo cablear el
+    // control, no pedir más memoria. Gain/Bass/Middle/Treble/Presence/Volume del preamp NO
+    // se duplican aquí: ya están cubiertos por sus direcciones "altas" (`60 00 06 51`–`56`),
+    // que son la fuente de verdad confirmada con audio; las bajas siguen documentadas como
+    // alias sin usar en KatanaAddresses.
+
+    /** ⚠️ Bright, `60 00 00 29`. **Sin confirmar.** */
+    val ampBright: KatanaEnumParameter = switch(KatanaAddresses.AMP_BRIGHT)
+
+    /** ⚠️ Gain SW, `60 00 00 2A`, tres posiciones. **Sin confirmar.** */
+    val ampGainSw: KatanaEnumParameter =
+        selector(KatanaAddresses.AMP_GAIN_SW, KatanaAddresses.GAIN_SW_VALUES)
+
+    /** ⚠️ Solo Sw del amplificador, `60 00 00 2B`. **Sin confirmar.** */
+    val ampSoloEnabled: KatanaEnumParameter = switch(KatanaAddresses.AMP_SOLO_ENABLED)
+
+    /** ⚠️ Solo Level del amplificador, `60 00 00 2C`, `0..100`. **Sin confirmar.** */
+    val ampSoloLevel: KatanaParameter =
+        parameter(KatanaAddresses.AMP_SOLO_LEVEL, KatanaAddresses.PANEL_LEVEL_SCALE)
+
+    // --- Parámetros internos fijos de Delay 1 y Reverb (CLAUDE.md §5.2) --------------------
+    //
+    // ⚠️ Implementados, pendientes de confirmar con audio. Reverb Time (`60 00 05 42`) y
+    // Reverb Effect Level (`60 00 05 48`, la misma dirección que [KatanaAddresses.REVERB_LEVEL_DERIVED],
+    // ya probada como no funcional) quedan **fuera a propósito** — ver sus respectivos KDoc en
+    // KatanaAddresses.
+
+    /** ⚠️ Time de Delay 1, `60 00 05 02`–`03` (2 bytes), `1..2000` ms. Sin confirmar. */
+    val delayTime: KatanaParameter =
+        parameter(KatanaAddresses.DELAY_TIME, KatanaAddresses.DELAY_TIME_SCALE, byteWidth = 2)
+
+    /** ⚠️ Feedback de Delay 1, `60 00 05 04`, `0..100`. Sin confirmar. */
+    val delayFeedback: KatanaParameter =
+        parameter(KatanaAddresses.DELAY_FEEDBACK, KatanaAddresses.PANEL_LEVEL_SCALE)
+
+    /** ⚠️ High Cut de Delay 1, `60 00 05 05`, 15 frecuencias. Sin confirmar. */
+    val delayHighCut: KatanaEnumParameter =
+        selector(KatanaAddresses.DELAY_HIGH_CUT, DelayHighCutFrequency.VALUES)
+
+    /** ⚠️ Effect Level de Delay 1, `60 00 05 06`, `0..120`. Sin confirmar. */
+    val delayEffectLevel: KatanaParameter =
+        parameter(KatanaAddresses.DELAY_EFFECT_LEVEL, KatanaAddresses.DELAY_EFFECT_SCALE)
+
+    /** ⚠️ Direct Mix de Delay 1, `60 00 05 07`, `0..100`. Sin confirmar. */
+    val delayDirectMix: KatanaParameter =
+        parameter(KatanaAddresses.DELAY_DIRECT_MIX, KatanaAddresses.PANEL_LEVEL_SCALE)
+
+    /** ⚠️ Pre Delay de Reverb, `60 00 05 43`–`44` (2 bytes), `0..500` ms. Sin confirmar. */
+    val reverbPreDelay: KatanaParameter =
+        parameter(
+            KatanaAddresses.REVERB_PRE_DELAY,
+            KatanaAddresses.REVERB_PRE_DELAY_SCALE,
+            byteWidth = 2,
+        )
+
+    /** ⚠️ Low Cut de Reverb, `60 00 05 45`, 18 frecuencias. Sin confirmar. */
+    val reverbLowCut: KatanaEnumParameter =
+        selector(KatanaAddresses.REVERB_LOW_CUT, ReverbLowCutFrequency.VALUES)
+
+    /** ⚠️ High Cut de Reverb, `60 00 05 46`, 15 frecuencias. Sin confirmar. */
+    val reverbHighCut: KatanaEnumParameter =
+        selector(KatanaAddresses.REVERB_HIGH_CUT, ReverbHighCutFrequency.VALUES)
+
+    /** ⚠️ Density de Reverb, `60 00 05 47`, `0..10`. Sin confirmar. */
+    val reverbDensity: KatanaParameter =
+        parameter(KatanaAddresses.REVERB_DENSITY, KatanaAddresses.REVERB_DENSITY_SCALE)
+
+    /** ⚠️ Direct Mix de Reverb, `60 00 05 49`, `0..100`. Sin confirmar. */
+    val reverbDirectMix: KatanaParameter =
+        parameter(KatanaAddresses.REVERB_DIRECT_MIX, KatanaAddresses.PANEL_LEVEL_SCALE)
+
+    /**
+     * ⚠️ Time de Reverb, `60 00 05 42`, `0.1..10.0` s con paso de 0.1. Sin confirmar.
+     *
+     * Es el primer control de este repositorio con [KatanaFractionalParameter]: su valor
+     * mostrado no es un `Int` limpio, así que `displayValue`/`setLevel` trabajan en `Double`.
+     * Ver [FractionalLevelScale][dev.alonx3.ktnacontrol.protocol.FractionalLevelScale].
+     */
+    val reverbTime: KatanaFractionalParameter =
+        fractionalParameter(KatanaAddresses.REVERB_TIME, KatanaAddresses.REVERB_TIME_SCALE)
+
+    /**
+     * ⚠️ Pre Delay de 2x2 Chorus (banda Low), `60 00 02 3A`, `0.0..40.0` ms con paso de 0.5.
+     * Sin confirmar.
+     *
+     * **Solo significa "Pre Delay" cuando el tipo activo de Mod es 2x2 Chorus**
+     * (`ModFxType.CHORUS`) — ver el KDoc de
+     * [KatanaAddresses.MOD_CHORUS_PRE_DELAY_LOW]. El repositorio registra el control de
+     * todos modos, igual que el resto: quién puede editarlo con sentido lo decide la UI.
+     */
+    val modChorusPreDelayLow: KatanaFractionalParameter = fractionalParameter(
+        KatanaAddresses.MOD_CHORUS_PRE_DELAY_LOW,
+        KatanaAddresses.MOD_CHORUS_PRE_DELAY_SCALE,
+    )
+
+    /** ⚠️ Pre Delay de 2x2 Chorus (banda High), `60 00 02 3E`. Ver [modChorusPreDelayLow]. */
+    val modChorusPreDelayHigh: KatanaFractionalParameter = fractionalParameter(
+        KatanaAddresses.MOD_CHORUS_PRE_DELAY_HIGH,
+        KatanaAddresses.MOD_CHORUS_PRE_DELAY_SCALE,
+    )
 
     /** Ver [boostTypeByColor]. Slots de color de MOD. */
     val modTypeByColor: List<KatanaEnumParameter> =
@@ -294,8 +404,30 @@ class KatanaRepository(
      * structural analogy already proved wrong once (CLAUDE.md §5), so nothing counts as
      * confirmed until it has been heard.
      */
-    private fun parameter(address: Address, scale: LevelScale): KatanaParameter =
+    private fun parameter(
+        address: Address,
+        scale: LevelScale,
+        byteWidth: Int = 1,
+    ): KatanaParameter =
         KatanaParameter(
+            address = address,
+            scale = scale,
+            link = link,
+            scope = scope,
+            debounceMillis = debounceMillis,
+            onDiagnostic = onDiagnostic,
+            byteWidth = byteWidth,
+        ).also { created -> controls += created }
+
+    /**
+     * Registers a fractional-scale parameter — see [KatanaFractionalParameter] and
+     * [FractionalLevelScale]. Same debounce as [parameter]: it is still a dragged slider.
+     */
+    private fun fractionalParameter(
+        address: Address,
+        scale: FractionalLevelScale,
+    ): KatanaFractionalParameter =
+        KatanaFractionalParameter(
             address = address,
             scale = scale,
             link = link,
@@ -365,17 +497,21 @@ class KatanaRepository(
             address = KatanaAddresses.MEMORY_DUMP,
             size = KatanaAddresses.MEMORY_DUMP_SIZE,
         )
-        val raw = sendAndCollectUntilQuiet(link.incoming, timeoutMillis = windowMillis) {
+        // El filtro es lo que impide que un reporte espontáneo en vuelo durante el dump
+        // —un cambio de canal, una perilla, un color— se cuele como si fuera un trozo de
+        // memoria. Sin él, `applyDumpValue` podía recibir el byte alto de un control de
+        // 2 bytes y convertir el canal en Panel. Ver BACKLOG.md, "El estado se
+        // desincroniza al cambiar de canal rápido" y "Propuesta de diseño".
+        val result = sendAndCollectUntilQuiet(
+            messages = link.incoming,
+            accept = blockReplyIn(KatanaAddresses.MEMORY_DUMP, KatanaAddresses.MEMORY_DUMP_SIZE),
+            timeoutMillis = windowMillis,
+        ) {
             link.send(query)
         }
-        val parsed = raw.map { message -> RolandSysEx.parse(message) }
-        val chunks = parsed.filterIsInstance<RolandMessage.Data>()
-        val dump = MemoryDump.from(chunks)
+        val dump = MemoryDump.from(result.accepted)
 
-        val missing = controls.filter { control ->
-            val value = dump.byteAt(control.address)
-            value == null || !control.applyDumpValue(value)
-        }
+        val missing = controls.filter { control -> !control.applyDumpValue(dump) }
         var recovered = 0
         missing.forEach { control ->
             if (control.read() != null) recovered++
@@ -383,12 +519,13 @@ class KatanaRepository(
 
         return DumpLoad(
             state = AmpState.from(dump),
-            messages = raw.size,
-            invalidMessages = parsed.count { it is RolandMessage.Invalid },
+            messages = result.accepted.size + result.rejected.size + result.invalidCount,
+            invalidMessages = result.invalidCount,
             dataBytes = dump.dataByteCount,
             fromDump = controls.size - missing.size,
             fromFallbackGet = recovered,
             stillUnknown = missing.size - recovered,
+            rejectedDuringWindow = result.rejected.groupingBy { it }.eachCount(),
         )
     }
 
@@ -404,6 +541,12 @@ class KatanaRepository(
         val fromFallbackGet: Int,
         /** Controls still unknown: neither in the dump nor answered by their GET. */
         val stillUnknown: Int,
+        /**
+         * Addresses of well-formed messages [blockReplyIn] rejected during the collection
+         * window, with how many times each showed up — spontaneous reports that happened to
+         * land while the dump was in flight. Empty in the common case.
+         */
+        val rejectedDuringWindow: Map<Address, Int> = emptyMap(),
     )
 
     /** Stops listening and drops pending writes. Call when the connection goes away. */

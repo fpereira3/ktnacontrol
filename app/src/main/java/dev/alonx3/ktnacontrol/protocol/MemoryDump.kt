@@ -57,6 +57,22 @@ class MemoryDump(
     fun byteAt(address: Address): Int? =
         chunks.firstNotNullOfOrNull { chunk -> chunk.byteAt(address) }
 
+    /**
+     * The [width] consecutive bytes starting at [address], or null if any of them falls
+     * outside every chunk.
+     *
+     * All-or-nothing on purpose: a multi-byte control (the active channel, CLAUDE.md §5.1,
+     * is the only one today) has a single value spread over its bytes, and decoding a
+     * partial read would silently make up a value nobody sent.
+     */
+    fun bytesAt(address: Address, width: Int): ByteArray? {
+        val bytes = ByteArray(width)
+        for (offset in 0 until width) {
+            bytes[offset] = (byteAt(address + offset) ?: return null).toByte()
+        }
+        return bytes
+    }
+
     /** Every address of [addresses] the dump covers, with its byte. Misses are left out. */
     fun valuesAt(addresses: Iterable<Address>): Map<Address, Int> =
         addresses.mapNotNull { address -> byteAt(address)?.let { address to it } }.toMap()
