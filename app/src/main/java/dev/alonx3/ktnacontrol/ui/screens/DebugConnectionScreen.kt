@@ -20,18 +20,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,10 +42,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,8 +66,18 @@ import dev.alonx3.ktnacontrol.protocol.AmpCategory
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.BoostType
 import dev.alonx3.ktnacontrol.protocol.DelayHighCutFrequency
+import dev.alonx3.ktnacontrol.protocol.ChainBlock
 import dev.alonx3.ktnacontrol.protocol.DelayType
+import dev.alonx3.ktnacontrol.protocol.EqParams
+import dev.alonx3.ktnacontrol.protocol.EqSelection
+import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
+import dev.alonx3.ktnacontrol.protocol.ParamSpec
+import dev.alonx3.ktnacontrol.protocol.PresetSave
+import dev.alonx3.ktnacontrol.protocol.ModFxInternalParams
+import dev.alonx3.ktnacontrol.protocol.ParamKind
 import dev.alonx3.ktnacontrol.protocol.ModFxType
+import dev.alonx3.ktnacontrol.protocol.displayBounds
+import dev.alonx3.ktnacontrol.protocol.rawToDisplay
 import dev.alonx3.ktnacontrol.protocol.ReverbHighCutFrequency
 import dev.alonx3.ktnacontrol.protocol.ReverbLowCutFrequency
 import dev.alonx3.ktnacontrol.protocol.ReverbType
@@ -80,22 +91,10 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.horizontalScroll
+import dev.alonx3.ktnacontrol.protocol.ChainDiagramBlock
+import dev.alonx3.ktnacontrol.protocol.displayStep
 
-/**
- * The two halves of the diagnostics screen, reachable from the drawer.
- *
- * They are split because they compete for vertical space: with six sliders and eight buttons
- * on one screen the console was squeezed down to nothing.
- */
-enum class DebugSection(@param:androidx.annotation.StringRes val titleRes: Int) {
-    LOGS(R.string.debug_connection_section_logs),
-    SLIDERS(R.string.debug_connection_section_sliders),
-}
-
-/**
- * Diagnostics screen: USB actions plus a live console on one side, the amp's continuous
- * controls on the other.
- */
 @Composable
 fun DebugConnectionScreen(
     modifier: Modifier = Modifier,
@@ -109,15 +108,28 @@ fun DebugConnectionScreen(
     val effectColors by viewModel.effectColors.collectAsStateWithLifecycle()
     val effectEnabled by viewModel.effectEnabled.collectAsStateWithLifecycle()
     val variationApplies by viewModel.ampVariationApplies.collectAsStateWithLifecycle()
+    val exportInFlight by viewModel.exportInFlight.collectAsStateWithLifecycle()
+    val reloadInFlight by viewModel.reloadInFlight.collectAsStateWithLifecycle()
     val effectTypes by viewModel.effectTypes.collectAsStateWithLifecycle()
     val boosterParams by viewModel.boosterParams.collectAsStateWithLifecycle()
     val boosterSoloEnabled by viewModel.boosterSoloEnabled.collectAsStateWithLifecycle()
     val ampSoloLevel by viewModel.ampSoloLevel.collectAsStateWithLifecycle()
+    val ampSoloEnabledPanel by viewModel.ampSoloEnabledPanel.collectAsStateWithLifecycle()
+    val ampSoloLevelPanel by viewModel.ampSoloLevelPanel.collectAsStateWithLifecycle()
     val delayParams by viewModel.delayParams.collectAsStateWithLifecycle()
     val reverbParams by viewModel.reverbParams.collectAsStateWithLifecycle()
     val reverbTime by viewModel.reverbTime.collectAsStateWithLifecycle()
     val modChorusPreDelayLow by viewModel.modChorusPreDelayLow.collectAsStateWithLifecycle()
     val modChorusPreDelayHigh by viewModel.modChorusPreDelayHigh.collectAsStateWithLifecycle()
+    val modFxInternalRaw by viewModel.modFxInternalRaw.collectAsStateWithLifecycle()
+    val fxInternalRaw by viewModel.fxInternalRaw.collectAsStateWithLifecycle()
+    val noPanelParams by viewModel.noPanelParams.collectAsStateWithLifecycle()
+    val contourSlotValues by viewModel.contourSlots.collectAsStateWithLifecycle()
+    val eq1Raw by viewModel.eq1Raw.collectAsStateWithLifecycle()
+    val eq2Raw by viewModel.eq2Raw.collectAsStateWithLifecycle()
+    val chainSlotValues by viewModel.chainSlots.collectAsStateWithLifecycle()
+    val presetSaveInFlight by viewModel.presetSaveInFlight.collectAsStateWithLifecycle()
+    val presetSendState by viewModel.presetSend.state.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboard.current
@@ -141,6 +153,8 @@ fun DebugConnectionScreen(
         reverbTime = reverbTime,
         modChorusPreDelayLow = modChorusPreDelayLow,
         modChorusPreDelayHigh = modChorusPreDelayHigh,
+        modInternalRaw = modFxInternalRaw,
+        fxInternalRaw = fxInternalRaw,
         editMode = editMode,
         snackbarHostState = snackbarHostState,
         onScanClicked = viewModel::onScanClicked,
@@ -163,6 +177,15 @@ fun DebugConnectionScreen(
         onBoosterSoloEnabledChanged = viewModel::onBoosterSoloEnabledChanged,
         onAmpSoloLevelChanged = viewModel::onAmpSoloLevelChanged,
         onReadAmpSoloLevelClicked = viewModel::onReadAmpSoloLevelClicked,
+        diagnostics = SoloDiagnostics(
+            panelEnabled = ampSoloEnabledPanel,
+            panelLevel = ampSoloLevelPanel,
+            onPanelEnabledChanged = viewModel::onAmpSoloPanelEnabledChanged,
+            onPanelLevelChanged = viewModel::onAmpSoloPanelLevelChanged,
+            onReadPanelClicked = viewModel::onReadAmpSoloPanelClicked,
+            onProbeSoloPreamp = viewModel::onProbeAmpSoloPreampClicked,
+            onProbeSoloPanel = viewModel::onProbeAmpSoloPanelClicked,
+        ),
         onDelayParamChanged = viewModel::onDelayParamChanged,
         onReadDelayParamClicked = viewModel::onReadDelayParamClicked,
         onReverbParamChanged = viewModel::onReverbParamChanged,
@@ -173,6 +196,41 @@ fun DebugConnectionScreen(
         onReadModChorusPreDelayLowClicked = viewModel::onReadModChorusPreDelayLowClicked,
         onModChorusPreDelayHighChanged = viewModel::onModChorusPreDelayHighChanged,
         onReadModChorusPreDelayHighClicked = viewModel::onReadModChorusPreDelayHighClicked,
+        noPanelParams = noPanelParams,
+        contourSlotValues = contourSlotValues,
+        eq1Raw = eq1Raw,
+        eq2Raw = eq2Raw,
+        chainSlotValues = chainSlotValues,
+        onNoPanelParamChanged = viewModel::onNoPanelParamChanged,
+        onReadNoPanelParamClicked = viewModel::onReadNoPanelParamClicked,
+        onContourShapeChanged = viewModel::onContourShapeChanged,
+        onContourFreqShiftChanged = viewModel::onContourFreqShiftChanged,
+        onReadContourSlotClicked = viewModel::onReadContourSlotClicked,
+        onEqParamChanged = viewModel::onEqParamChanged,
+        onReadEqParamClicked = viewModel::onReadEqParamClicked,
+        presetSaveInFlight = presetSaveInFlight,
+        onSavePreset = viewModel::onSavePresetClicked,
+        // Mandar un preset de la Biblioteca al amplificador. `canSend` es el mismo `canEdit`
+        // que gobierna el resto de la escritura destructiva (conectado + Edit Mode, §4.2); la
+        // lógica de los dos pasos y del envío vive en `PresetSendFlow`, probada en JVM.
+        presetSend = PresetSendControls(
+            state = presetSendState,
+            canSend = state is UsbConnectionState.Connected && editMode,
+            onRequest = { name, image -> viewModel.presetSend.request(name, image) },
+            onContinue = viewModel.presetSend::onContinue,
+            onBack = viewModel.presetSend::onBack,
+            onCancel = viewModel.presetSend::onCancel,
+            onConfirmed = viewModel.presetSend::onConfirmed,
+            onResultShown = viewModel.presetSend::onResultShown,
+        ),
+        onModParamChanged = { type, label, value -> viewModel.onModFxParamChanged(false, type, label, value) },
+        onReadModParamClicked = { type, label -> viewModel.onReadModFxParamClicked(false, type, label) },
+        onFxParamChanged = { type, label, value -> viewModel.onModFxParamChanged(true, type, label, value) },
+        onReadFxParamClicked = { type, label -> viewModel.onReadModFxParamClicked(true, type, label) },
+        reloadInFlight = reloadInFlight,
+        onRefreshClicked = viewModel::onRefreshClicked,
+        exportInFlight = exportInFlight,
+        onExportPreset = viewModel::onExportPreset,
         onCopyLog = { text ->
             scope.launch {
                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(CLIP_LABEL, text)))
@@ -221,6 +279,7 @@ private fun DebugConnectionScreen(
     onBoosterSoloEnabledChanged: (Boolean) -> Unit,
     onAmpSoloLevelChanged: (Int) -> Unit,
     onReadAmpSoloLevelClicked: () -> Unit,
+    diagnostics: SoloDiagnostics,
     onDelayParamChanged: (DelayParamId, Int) -> Unit,
     onReadDelayParamClicked: (DelayParamId) -> Unit,
     onReverbParamChanged: (ReverbParamId, Int) -> Unit,
@@ -234,114 +293,201 @@ private fun DebugConnectionScreen(
     onReadModChorusPreDelayLowClicked: () -> Unit,
     onModChorusPreDelayHighChanged: (Double) -> Unit,
     onReadModChorusPreDelayHighClicked: () -> Unit,
+    modInternalRaw: Map<ModFxType, Map<String, Int?>>,
+    fxInternalRaw: Map<ModFxType, Map<String, Int?>>,
+    noPanelParams: Map<NoPanelParamId, Int?>,
+    contourSlotValues: List<DebugConnectionViewModel.ContourSlotValues>,
+    eq1Raw: Map<String, Int?>,
+    eq2Raw: Map<String, Int?>,
+    chainSlotValues: List<Int?>,
+    onNoPanelParamChanged: (NoPanelParamId, Int) -> Unit,
+    onReadNoPanelParamClicked: (NoPanelParamId) -> Unit,
+    onContourShapeChanged: (Int, Int) -> Unit,
+    onContourFreqShiftChanged: (Int, Int) -> Unit,
+    onReadContourSlotClicked: (Int) -> Unit,
+    onEqParamChanged: (Boolean, String, Double) -> Unit,
+    onReadEqParamClicked: (Boolean, String) -> Unit,
+    presetSaveInFlight: Boolean,
+    onSavePreset: (String, Int) -> Unit,
+    presetSend: PresetSendControls,
+    onModParamChanged: (ModFxType, String, Double) -> Unit,
+    onReadModParamClicked: (ModFxType, String) -> Unit,
+    onFxParamChanged: (ModFxType, String, Double) -> Unit,
+    onReadFxParamClicked: (ModFxType, String) -> Unit,
+    reloadInFlight: Boolean,
+    onRefreshClicked: () -> Unit,
+    exportInFlight: Boolean,
+    onExportPreset: (String) -> Unit,
     onCopyLog: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
-    var section by rememberSaveable { mutableStateOf(DebugSection.LOGS) }
+    // La navegación: un enum y un `when`, sin `NavHost` (CLAUDE.md §4.2, "La navegación").
+    // `ShellNavigation` es Kotlin puro y tiene tests: qué pestaña está activa y qué hace el back
+    // son decisiones, y las decisiones se prueban.
+    val navigation = rememberSaveable(saver = ShellNavigationSaver) { ShellNavigation() }
+    val section by navigation.current.collectAsStateWithLifecycle()
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
+    // El back replica lo que haría un `NavHost` con `popUpTo(startDestination)`: desde cualquier
+    // pestaña vuelve a la de inicio. En la de inicio se deshabilita, para que ahí el back cierre
+    // la app como espera cualquiera. ⚠️ El de la Biblioteca con un preset abierto se registra más
+    // adentro y gana a este, que es lo correcto: primero se cierra el preset.
+    BackHandler(enabled = section != navigation.start) { navigation.onBack() }
+
+    Scaffold(
         modifier = modifier,
-        drawerContent = {
-            ModalDrawerSheet {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                HorizontalDivider()
-                DebugSection.entries.forEach { entry ->
-                    NavigationDrawerItem(
-                        label = { Text(stringResource(entry.titleRes)) },
-                        selected = entry == section,
-                        onClick = {
-                            section = entry
-                            scope.launch { drawerState.close() }
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    )
-                }
-            }
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(section.titleRes)) },
+                actions = {
+                    // ⚠️ El estado de la conexión, visible en las cuatro pantallas. Antes solo se
+                    // sabía yendo a Logs — o sea que la respuesta a "¿por qué no se mueve nada?"
+                    // estaba en otra pantalla.
+                    ConnectionBadge(state = state)
+                    AdvancedAction(current = section, onSelect = navigation::select)
+                },
+            )
         },
-    ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text(stringResource(section.titleRes)) },
-                    navigationIcon = {
-                        TextButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Text(stringResource(R.string.debug_connection_menu))
-                        }
-                    },
+        // Logs no está aquí: es entrada secundaria de la barra de arriba (CLAUDE.md §4.2).
+        bottomBar = { ShellBottomBar(current = section, onSelect = navigation::select) },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { innerPadding ->
+        Box(modifier = Modifier.padding(innerPadding)) {
+            when (section) {
+                DebugSection.LOGS -> LogsPane(
+                    log = log,
+                    state = state,
+                    editMode = editMode,
+                    onScanClicked = onScanClicked,
+                    onHandshakeClicked = onHandshakeClicked,
+                    onHandshakeRealVersionClicked = onHandshakeRealVersionClicked,
+                    onIdentityRequestClicked = onIdentityRequestClicked,
+                    onReadDeviceNameClicked = onReadDeviceNameClicked,
+                    onReadPresetNamesClicked = onReadPresetNamesClicked,
+                    onEditModeChanged = onEditModeChanged,
+                    onReadMemoryDumpClicked = onReadMemoryDumpClicked,
+                    onCopyLog = onCopyLog,
                 )
-            },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-        ) { innerPadding ->
-            Box(modifier = Modifier.padding(innerPadding)) {
-                when (section) {
-                    DebugSection.LOGS -> LogsPane(
-                        log = log,
-                        state = state,
-                        editMode = editMode,
-                        onScanClicked = onScanClicked,
-                        onHandshakeClicked = onHandshakeClicked,
-                        onHandshakeRealVersionClicked = onHandshakeRealVersionClicked,
-                        onIdentityRequestClicked = onIdentityRequestClicked,
-                        onReadDeviceNameClicked = onReadDeviceNameClicked,
-                        onReadPresetNamesClicked = onReadPresetNamesClicked,
-                        onEditModeChanged = onEditModeChanged,
-                        onReadMemoryDumpClicked = onReadMemoryDumpClicked,
-                        onCopyLog = onCopyLog,
-                    )
 
-                    DebugSection.SLIDERS -> SlidersPane(
-                        levels = levels,
-                        selectors = selectors,
-                        effectColors = effectColors,
-                        effectEnabled = effectEnabled,
-                        variationApplies = variationApplies,
-                        state = state,
-                        editMode = editMode,
-                        onEditModeChanged = onEditModeChanged,
-                        onLevelChanged = onLevelChanged,
-                        onReadLevelClicked = onReadLevelClicked,
-                        onSelectorChanged = onSelectorChanged,
-                        onAmpVariationChanged = onAmpVariationChanged,
-                        onEffectColorChanged = onEffectColorChanged,
-                        onEffectEnabledChanged = onEffectEnabledChanged,
-                        effectTypes = effectTypes,
-                        onEffectTypeChanged = onEffectTypeChanged,
-                        boosterParams = boosterParams,
-                        boosterSoloEnabled = boosterSoloEnabled,
-                        ampSoloLevel = ampSoloLevel,
-                        delayParams = delayParams,
-                        reverbParams = reverbParams,
-                        onBoosterParamChanged = onBoosterParamChanged,
-                        onReadBoosterParamClicked = onReadBoosterParamClicked,
-                        onBoosterSoloEnabledChanged = onBoosterSoloEnabledChanged,
-                        onAmpSoloLevelChanged = onAmpSoloLevelChanged,
-                        onReadAmpSoloLevelClicked = onReadAmpSoloLevelClicked,
-                        onDelayParamChanged = onDelayParamChanged,
-                        onReadDelayParamClicked = onReadDelayParamClicked,
-                        onReverbParamChanged = onReverbParamChanged,
-                        onReadReverbParamClicked = onReadReverbParamClicked,
-                reverbTime = reverbTime,
-                onReverbTimeChanged = onReverbTimeChanged,
-                onReadReverbTimeClicked = onReadReverbTimeClicked,
-                modChorusPreDelayLow = modChorusPreDelayLow,
-                modChorusPreDelayHigh = modChorusPreDelayHigh,
-                onModChorusPreDelayLowChanged = onModChorusPreDelayLowChanged,
-                onReadModChorusPreDelayLowClicked = onReadModChorusPreDelayLowClicked,
-                onModChorusPreDelayHighChanged = onModChorusPreDelayHighChanged,
-                onReadModChorusPreDelayHighClicked = onReadModChorusPreDelayHighClicked,
-                    )
-                }
+                // La pantalla de dominio del amplificador. Recibe **solo** lo suyo: si
+                // algún día hace falta pasarle algo de un efecto, es que el reparto de
+                // `AmpDomain` está mal, no que falte un parámetro aquí.
+                DebugSection.AMP -> AmpScreen(
+                    levels = levels,
+                    selectors = selectors,
+                    variationApplies = variationApplies,
+                    ampSoloLevel = ampSoloLevel,
+                    state = state,
+                    editMode = editMode,
+                    onEditModeChanged = onEditModeChanged,
+                    onLevelChanged = onLevelChanged,
+                    onReadLevelClicked = onReadLevelClicked,
+                    onSelectorChanged = onSelectorChanged,
+                    onAmpVariationChanged = onAmpVariationChanged,
+                    onAmpSoloLevelChanged = onAmpSoloLevelChanged,
+                    onReadAmpSoloLevelClicked = onReadAmpSoloLevelClicked,
+                    diagnostics = diagnostics,
+                    noPanelParams = noPanelParams,
+                    contourSlotValues = contourSlotValues,
+                    eq1Raw = eq1Raw,
+                    eq2Raw = eq2Raw,
+                    chainSlotValues = chainSlotValues,
+                    onNoPanelParamChanged = onNoPanelParamChanged,
+                    onReadNoPanelParamClicked = onReadNoPanelParamClicked,
+                    onContourShapeChanged = onContourShapeChanged,
+                    onContourFreqShiftChanged = onContourFreqShiftChanged,
+                    onReadContourSlotClicked = onReadContourSlotClicked,
+                    onEqParamChanged = onEqParamChanged,
+                    onReadEqParamClicked = onReadEqParamClicked,
+                    reloadInFlight = reloadInFlight,
+                    onRefreshClicked = onRefreshClicked,
+                    onScanClicked = onScanClicked,
+                )
+
+                // La pantalla de dominio de los efectos. Recibe **solo** lo suyo, mismo
+                // criterio que la de amplificador: si algún día hace falta pasarle un
+                // control del amp, es que `AmpDomain` está mal, no que falte aquí.
+                DebugSection.EFFECTS -> EffectsScreen(
+                    levels = levels,
+                    effectColors = effectColors,
+                    effectEnabled = effectEnabled,
+                    effectTypes = effectTypes,
+                    state = state,
+                    editMode = editMode,
+                    onEditModeChanged = onEditModeChanged,
+                    onLevelChanged = onLevelChanged,
+                    onReadLevelClicked = onReadLevelClicked,
+                    onEffectColorChanged = onEffectColorChanged,
+                    onEffectEnabledChanged = onEffectEnabledChanged,
+                    onEffectTypeChanged = onEffectTypeChanged,
+                    boosterParams = boosterParams,
+                    boosterSoloEnabled = boosterSoloEnabled,
+                    onBoosterParamChanged = onBoosterParamChanged,
+                    onReadBoosterParamClicked = onReadBoosterParamClicked,
+                    onBoosterSoloEnabledChanged = onBoosterSoloEnabledChanged,
+                    delayParams = delayParams,
+                    reverbParams = reverbParams,
+                    selectors = selectors,
+                    onSelectorChanged = onSelectorChanged,
+                    onDelayParamChanged = onDelayParamChanged,
+                    onReadDelayParamClicked = onReadDelayParamClicked,
+                    onReverbParamChanged = onReverbParamChanged,
+                    onReadReverbParamClicked = onReadReverbParamClicked,
+                    reverbTime = reverbTime,
+                    onReverbTimeChanged = onReverbTimeChanged,
+                    onReadReverbTimeClicked = onReadReverbTimeClicked,
+                    modChorusPreDelayLow = modChorusPreDelayLow,
+                    modChorusPreDelayHigh = modChorusPreDelayHigh,
+                    onModChorusPreDelayLowChanged = onModChorusPreDelayLowChanged,
+                    onReadModChorusPreDelayLowClicked = onReadModChorusPreDelayLowClicked,
+                    onModChorusPreDelayHighChanged = onModChorusPreDelayHighChanged,
+                    onReadModChorusPreDelayHighClicked = onReadModChorusPreDelayHighClicked,
+                    modInternalRaw = modInternalRaw,
+                    fxInternalRaw = fxInternalRaw,
+                    onModParamChanged = onModParamChanged,
+                    onReadModParamClicked = onReadModParamClicked,
+                    onFxParamChanged = onFxParamChanged,
+                    onReadFxParamClicked = onReadFxParamClicked,
+                    reloadInFlight = reloadInFlight,
+                    onRefreshClicked = onRefreshClicked,
+                    onScanClicked = onScanClicked,
+                )
+
+                // **Presets**: la mitad de arriba escribe en el amplificador (guardar en
+                // canal, exportar) y la de abajo es la Biblioteca de ficheros, que funciona
+                // con el cable desenchufado. La pantalla las separa a propósito — ver
+                // CLAUDE.md §4.2, "Cómo se distingue en vivo de Biblioteca".
+                DebugSection.PRESETS -> PresetsScreen(
+                    state = state,
+                    editMode = editMode,
+                    onEditModeChanged = onEditModeChanged,
+                    currentChannel = selectors[SelectorId.ACTIVE_CHANNEL],
+                    presetSaveInFlight = presetSaveInFlight,
+                    onSavePreset = onSavePreset,
+                    exportInFlight = exportInFlight,
+                    onExportPreset = onExportPreset,
+                    onScanClicked = onScanClicked,
+                    sendToAmp = presetSend,
+                )
             }
         }
     }
 }
+
+/**
+ * Guarda la pestaña activa a través de un cambio de configuración (girar la pantalla).
+ *
+ * Antes bastaba un `rememberSaveable` sobre el enum; ahora que la navegación es un objeto con
+ * estado hay que decirle a Compose **qué** guardar: el nombre de la sección y nada más, que es
+ * todo lo que no se puede reconstruir.
+ */
+private val ShellNavigationSaver = Saver<ShellNavigation, String>(
+    save = { it.current.value.name },
+    restore = { name ->
+        ShellNavigation().also { nav ->
+            DebugSection.entries.firstOrNull { it.name == name }?.let(nav::select)
+        }
+    },
+)
 
 /**
  * Actions plus the live console.
@@ -422,257 +568,27 @@ private fun LogsPane(
     }
 }
 
-/**
- * Everything that controls the sound: the amp section, then one card per effect.
- *
- * Split off from the log so neither competes for height, and scrollable because eleven
- * sliders plus five effect cards do not fit on a phone.
- *
- * Everything on this screen is confirmed against the amplifier except one detail: the
- * VARIATION switch reads one address and writes another, because `60 00 06 5C` only reports.
- * See `KatanaAddresses.AMP_VARIATION`.
- */
-@Composable
-private fun SlidersPane(
-    levels: Map<LevelId, Int?>,
-    selectors: Map<SelectorId, Int?>,
-    effectColors: Map<EffectId, Int?>,
-    effectEnabled: Map<EffectId, Boolean?>,
-    variationApplies: Boolean,
-    state: UsbConnectionState,
-    editMode: Boolean,
-    onEditModeChanged: (Boolean) -> Unit,
-    onLevelChanged: (LevelId, Int) -> Unit,
-    onReadLevelClicked: (LevelId) -> Unit,
-    onSelectorChanged: (SelectorId, Int) -> Unit,
-    onAmpVariationChanged: (Boolean) -> Unit,
-    onEffectColorChanged: (EffectId, Int) -> Unit,
-    onEffectEnabledChanged: (EffectId, Boolean) -> Unit,
-    effectTypes: Map<EffectId, Int?>,
-    onEffectTypeChanged: (EffectId, Int) -> Unit,
-    boosterParams: Map<BoosterParamId, Int?>,
-    boosterSoloEnabled: Boolean?,
-    ampSoloLevel: Int?,
-    delayParams: Map<DelayParamId, Int?>,
-    reverbParams: Map<ReverbParamId, Int?>,
-    onBoosterParamChanged: (BoosterParamId, Int) -> Unit,
-    onReadBoosterParamClicked: (BoosterParamId) -> Unit,
-    onBoosterSoloEnabledChanged: (Boolean) -> Unit,
-    onAmpSoloLevelChanged: (Int) -> Unit,
-    onReadAmpSoloLevelClicked: () -> Unit,
-    onDelayParamChanged: (DelayParamId, Int) -> Unit,
-    onReadDelayParamClicked: (DelayParamId) -> Unit,
-    onReverbParamChanged: (ReverbParamId, Int) -> Unit,
-    onReadReverbParamClicked: (ReverbParamId) -> Unit,
-    reverbTime: Double?,
-    onReverbTimeChanged: (Double) -> Unit,
-    onReadReverbTimeClicked: () -> Unit,
-    modChorusPreDelayLow: Double?,
-    modChorusPreDelayHigh: Double?,
-    onModChorusPreDelayLowChanged: (Double) -> Unit,
-    onReadModChorusPreDelayLowClicked: () -> Unit,
-    onModChorusPreDelayHighChanged: (Double) -> Unit,
-    onReadModChorusPreDelayHighClicked: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val connected = state is UsbConnectionState.Connected
-
-    // El contrato de Edit Mode (CLAUDE.md §4.2): **apagado deja cambiar de canal y nada más**.
-    // Sin edit mode el amplificador no manda reportes espontáneos, así que la app no puede
-    // confirmar ningún parámetro que escriba — mostrar los controles como si funcionaran sería
-    // mentir. El canal es la excepción deliberada: es un comando básico, no un ajuste fino.
-    val canEdit = connected && editMode
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    ) {
-        // Repeated from the Logs pane on purpose: this is where the sliders live, and without
-        // edit mode on they stop following the front-panel knobs. Having to switch sections to
-        // find out why nothing moves would be its own little bug.
-        EditModeToggle(
-            editMode = editMode,
-            enabled = connected,
-            onEditModeChanged = onEditModeChanged,
-        )
-        if (connected && !editMode) {
-            EditModeNotice()
-        }
-        HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
-
-        // ✅ Confirmado en las dos direcciones (CLAUDE.md §5.1). 9 valores: Panel + los 8
-        // canales de los dos bancos.
-        //
-        // **Único control que sigue habilitado con Edit Mode apagado**, a propósito: cambiar
-        // de canal es la operación que el contrato deja siempre disponible.
-        SectionHeader(stringResource(R.string.section_channel))
-        ChipSelector(
-            label = stringResource(R.string.section_channel),
-            options = channelOptions(),
-            selected = selectors[SelectorId.ACTIVE_CHANNEL],
-            enabled = connected,
-            onSelected = { value -> onSelectorChanged(SelectorId.ACTIVE_CHANNEL, value) },
-        )
-
-        SectionHeader(stringResource(R.string.section_amp))
-        ChipSelector(
-            label = stringResource(R.string.amp_category),
-            options = AmpCategory.entries.map { it.value to it.displayName },
-            selected = selectors[SelectorId.AMP_CATEGORY],
-            enabled = canEdit,
-            onSelected = { value -> onSelectorChanged(SelectorId.AMP_CATEGORY, value) },
-        )
-        DropdownSelector(
-            label = stringResource(R.string.amp_type),
-            options = AmpType.entries.map { it.value to it.displayName },
-            selected = selectors[SelectorId.AMP_TYPE],
-            enabled = canEdit,
-            onSelected = { value -> onSelectorChanged(SelectorId.AMP_TYPE, value) },
-        )
-        // El switch **lee** de `06 5C` y **escribe** por el modelo (`00 21`): esa dirección
-        // solo reporta. Se apaga cuando el modelo activo no es uno de los cinco canales base,
-        // porque entonces "variación" no tiene a qué referirse. Ver el KDoc de AMP_VARIATION.
-        SwitchRow(
-            label = stringResource(R.string.amp_variation),
-            checked = selectors[SelectorId.AMP_VARIATION] == SWITCH_ON_VALUE,
-            enabled = canEdit && variationApplies,
-            onCheckedChange = onAmpVariationChanged,
-        )
-
-        // ⚠️ Resto del bloque PREAMP (`60 00 00 29`-`2C`), sin confirmar todavía — ver
-        // BACKLOG.md, "Pendiente por probar".
-        SwitchRow(
-            label = stringResource(R.string.amp_bright),
-            checked = selectors[SelectorId.AMP_BRIGHT] == SWITCH_ON_VALUE,
-            enabled = canEdit,
-            onCheckedChange = { on ->
-                onSelectorChanged(
-                    SelectorId.AMP_BRIGHT,
-                    if (on) SWITCH_ON_VALUE else SWITCH_OFF_VALUE,
-                )
-            },
-        )
-        ChipSelector(
-            label = stringResource(R.string.amp_gain_sw),
-            options = gainSwOptions(),
-            selected = selectors[SelectorId.AMP_GAIN_SW],
-            enabled = canEdit,
-            onSelected = { value -> onSelectorChanged(SelectorId.AMP_GAIN_SW, value) },
-        )
-        SwitchRow(
-            label = stringResource(R.string.amp_solo),
-            checked = selectors[SelectorId.AMP_SOLO] == SWITCH_ON_VALUE,
-            enabled = canEdit,
-            onCheckedChange = { on ->
-                onSelectorChanged(
-                    SelectorId.AMP_SOLO,
-                    if (on) SWITCH_ON_VALUE else SWITCH_OFF_VALUE,
-                )
-            },
-        )
-        LevelControl(
-            label = stringResource(
-                R.string.amp_solo_level,
-                ampSoloLevel?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
-            ),
-            level = ampSoloLevel,
-            enabled = canEdit,
-            onLevelChanged = onAmpSoloLevelChanged,
-            onRead = onReadAmpSoloLevelClicked,
-        )
-
-        AMP_LEVELS.forEach { id ->
-            LevelRow(id, levels[id], canEdit, onLevelChanged, onReadLevelClicked)
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-        SectionHeader(stringResource(R.string.section_effects))
-
-        EffectId.entries.forEach { effect ->
-            EffectCard(
-                effect = effect,
-                level = levels[effect.level],
-                color = effectColors[effect],
-                enabled = effectEnabled[effect],
-                type = effectTypes[effect],
-                canEdit = canEdit,
-                onLevelChanged = onLevelChanged,
-                onReadLevelClicked = onReadLevelClicked,
-                onColorChanged = onEffectColorChanged,
-                onEnabledChanged = onEffectEnabledChanged,
-                onTypeChanged = onEffectTypeChanged,
-                boosterParams = boosterParams,
-                boosterSoloEnabled = boosterSoloEnabled,
-                onBoosterParamChanged = onBoosterParamChanged,
-                onReadBoosterParamClicked = onReadBoosterParamClicked,
-                onBoosterSoloEnabledChanged = onBoosterSoloEnabledChanged,
-                delayParams = delayParams,
-                reverbParams = reverbParams,
-                selectors = selectors,
-                onSelectorChanged = onSelectorChanged,
-                onDelayParamChanged = onDelayParamChanged,
-                onReadDelayParamClicked = onReadDelayParamClicked,
-                onReverbParamChanged = onReverbParamChanged,
-                onReadReverbParamClicked = onReadReverbParamClicked,
-                reverbTime = reverbTime,
-                onReverbTimeChanged = onReverbTimeChanged,
-                onReadReverbTimeClicked = onReadReverbTimeClicked,
-                modChorusPreDelayLow = modChorusPreDelayLow,
-                modChorusPreDelayHigh = modChorusPreDelayHigh,
-                onModChorusPreDelayLowChanged = onModChorusPreDelayLowChanged,
-                onReadModChorusPreDelayLowClicked = onReadModChorusPreDelayLowClicked,
-                onModChorusPreDelayHighChanged = onModChorusPreDelayHighChanged,
-                onReadModChorusPreDelayHighClicked = onReadModChorusPreDelayHighClicked,
-            )
-        }
-    }
-}
-
-/**
- * The amp/EQ knobs, i.e. every level that is **not** an effect.
- *
- * Derived rather than listed so that adding a level to [LevelId] cannot leave it invisible:
- * anything no effect claims shows up in the amp section.
- */
-private val AMP_LEVELS: List<LevelId> =
-    LevelId.entries - EffectId.entries.map { it.level }.toSet()
 
 /** `01` is "on" for every switch here. See `KatanaAddresses.BOOST_ENABLED` for the caveat. */
-private const val SWITCH_ON_VALUE = 0x01
+internal const val SWITCH_ON_VALUE = 0x01
 
 /** `00` is "off" — the other half of [SWITCH_ON_VALUE], spelled out for `AMP_BRIGHT`/`AMP_SOLO`. */
-private const val SWITCH_OFF_VALUE = 0x00
+internal const val SWITCH_OFF_VALUE = 0x00
 
 /**
  * The 9 values of the active-channel selector, labelled the way the front panel groups them:
  * Panel, then bank A 1-4, then bank B 1-4. See `KatanaAddresses.ACTIVE_CHANNEL`.
  */
 @Composable
-private fun channelOptions(): List<Pair<Int, String>> {
+internal fun channelOptions(): List<Pair<Int, String>> {
     val panel = 0 to stringResource(R.string.channel_panel)
     val bankA = (1..4).map { number -> number to stringResource(R.string.channel_bank_a, number) }
     val bankB = (5..8).map { number -> number to stringResource(R.string.channel_bank_b, number - 4) }
     return listOf(panel) + bankA + bankB
 }
 
-/** The 3 values of `AMP_GAIN_SW` (`60 00 00 2A`): Low / Middle / High. */
-@Composable
-private fun gainSwOptions(): List<Pair<Int, String>> = listOf(
-    0x00 to stringResource(R.string.amp_gain_sw_low),
-    0x01 to stringResource(R.string.amp_gain_sw_middle),
-    0x02 to stringResource(R.string.amp_gain_sw_high),
-)
-
-@Composable
-private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        modifier = modifier.padding(top = 8.dp, bottom = 4.dp),
-        style = MaterialTheme.typography.titleSmall,
-    )
-}
+// `gainSwOptions()` se eliminó junto con el control de Gain SW (2026-09-06): probado contra el
+// amplificador y sin efecto. La dirección sigue documentada en `KatanaAddresses`.
 
 /**
  * Explains why every parameter below is greyed out while Edit Mode is off.
@@ -682,7 +598,7 @@ private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
  * apagado por otra razón y dos avisos a la vez no aclaran nada.
  */
 @Composable
-private fun EditModeNotice(modifier: Modifier = Modifier) {
+internal fun EditModeNotice(modifier: Modifier = Modifier) {
     Text(
         text = stringResource(R.string.edit_mode_required),
         modifier = modifier.fillMaxWidth().padding(bottom = 4.dp),
@@ -692,7 +608,7 @@ private fun EditModeNotice(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun LevelRow(
+internal fun LevelRow(
     id: LevelId,
     level: Int?,
     canEdit: Boolean,
@@ -719,7 +635,7 @@ private fun LevelRow(
  * list of unrelated widgets.
  */
 @Composable
-private fun EffectCard(
+internal fun EffectCard(
     effect: EffectId,
     level: Int?,
     color: Int?,
@@ -754,8 +670,18 @@ private fun EffectCard(
     onReadModChorusPreDelayLowClicked: () -> Unit,
     onModChorusPreDelayHighChanged: (Double) -> Unit,
     onReadModChorusPreDelayHighClicked: () -> Unit,
+    modInternalRaw: Map<ModFxType, Map<String, Int?>>,
+    fxInternalRaw: Map<ModFxType, Map<String, Int?>>,
+    onModParamChanged: (ModFxType, String, Double) -> Unit,
+    onReadModParamClicked: (ModFxType, String) -> Unit,
+    onFxParamChanged: (ModFxType, String, Double) -> Unit,
+    onReadFxParamClicked: (ModFxType, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Resuelto una sola vez para las dos ramas de abajo — Mod y FX comparten catálogo de
+    // tipos (CLAUDE.md §5.2), así que null aquí significa "el amp todavía no reportó el tipo",
+    // no "el efecto no tiene tipo".
+    val modFxType = remember(type) { ModFxType.entries.firstOrNull { it.value == type } }
     Card(modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -826,18 +752,37 @@ private fun EffectCard(
                     onHighCutChanged = { value -> onSelectorChanged(SelectorId.REVERB_HIGH_CUT, value) },
                 )
 
-                EffectId.MOD -> ModInternalParams(
-                    activeType = type,
-                    preDelayLow = modChorusPreDelayLow,
-                    preDelayHigh = modChorusPreDelayHigh,
-                    canEdit = canEdit,
-                    onPreDelayLowChanged = onModChorusPreDelayLowChanged,
-                    onReadPreDelayLow = onReadModChorusPreDelayLowClicked,
-                    onPreDelayHighChanged = onModChorusPreDelayHighChanged,
-                    onReadPreDelayHigh = onReadModChorusPreDelayHighClicked,
-                )
+                EffectId.MOD -> {
+                    ModInternalParams(
+                        activeType = type,
+                        preDelayLow = modChorusPreDelayLow,
+                        preDelayHigh = modChorusPreDelayHigh,
+                        canEdit = canEdit,
+                        onPreDelayLowChanged = onModChorusPreDelayLowChanged,
+                        onReadPreDelayLow = onReadModChorusPreDelayLowClicked,
+                        onPreDelayHighChanged = onModChorusPreDelayHighChanged,
+                        onReadPreDelayHigh = onReadModChorusPreDelayHighClicked,
+                    )
+                    ModFxGenericParams(
+                        activeType = type,
+                        values = modFxType?.let { modInternalRaw[it] } ?: emptyMap(),
+                        canEdit = canEdit,
+                        onParamChanged = { label, value ->
+                            modFxType?.let { onModParamChanged(it, label, value) }
+                        },
+                        onReadParam = { label -> modFxType?.let { onReadModParamClicked(it, label) } },
+                    )
+                }
 
-                EffectId.FX -> Unit
+                EffectId.FX -> ModFxGenericParams(
+                    activeType = type,
+                    values = modFxType?.let { fxInternalRaw[it] } ?: emptyMap(),
+                    canEdit = canEdit,
+                    onParamChanged = { label, value ->
+                        modFxType?.let { onFxParamChanged(it, label, value) }
+                    },
+                    onReadParam = { label -> modFxType?.let { onReadFxParamClicked(it, label) } },
+                )
             }
         }
     }
@@ -1029,8 +974,14 @@ private fun ReverbParamRow(
  * (CLAUDE.md §5.2). Mod is "DSP complejo" — each type has its own address block — so unlike
  * Booster/Delay/Reverb these two sliders **only mean what they say while Mod's active type is
  * 2x2 Chorus**: with any other type active, the same two addresses hold that other type's own
- * parameters. Showing the sliders anyway would silently mislabel them, so this hides them and
- * explains why instead — same spirit as [EditModeNotice].
+ * parameters. Showing the sliders anyway would silently mislabel them, so con otro tipo activo
+ * simplemente no se dibujan.
+ *
+ * ⚠️ **Aquí había un aviso de "Solo disponible con el tipo 2x2 Chorus", quitado el 2026-09-06
+ * por obsoleto.** Tenía sentido cuando estos dos sliders eran lo único cableado de Mod: si no
+ * era Chorus, no había nada más que enseñar y convenía decirlo. Ahora los 31 tipos están
+ * cableados y [ModFxParams], justo debajo, muestra los del tipo que esté activo — así que el
+ * aviso decía "no hay nada para ti aquí" **debajo de una tarjeta llena de controles**.
  */
 @Composable
 private fun ModInternalParams(
@@ -1044,15 +995,7 @@ private fun ModInternalParams(
     onReadPreDelayHigh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (activeType != ModFxType.CHORUS.value) {
-        Text(
-            text = stringResource(R.string.mod_internal_params_requires_chorus),
-            modifier = modifier.fillMaxWidth().padding(top = 4.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
+    if (activeType != ModFxType.CHORUS.value) return
     Column(modifier = modifier.fillMaxWidth()) {
         FractionalLevelControl(
             label = stringResource(
@@ -1080,84 +1023,218 @@ private fun ModInternalParams(
 }
 
 /**
- * El catálogo de tipos de un efecto.
+ * Los parámetros internos de **cualquiera** de los 31 tipos de Mod/FX (CLAUDE.md §5.2,
+ * `ModFxInternalParams`), tabla en mano en vez de una sección por tipo: con 31 tipos y ~6
+ * parámetros de media, una función por tipo sería la misma forma repetida 31 veces. Solo se
+ * muestran los del tipo activo — el resto de direcciones del bloque pertenecen a otro tipo que
+ * comparte el mismo espacio (CLAUDE.md §5.2, "DSP complejo").
  *
- * Mod y FX comparten tabla porque **son la misma lista** en las dos fuentes de Mk2, no por
- * ahorrar código: ver [ModFxType].
+ * **No incluye el Pre Delay de 2x2 Chorus**: esos dos sliders son [ModInternalParams], arriba,
+ * y no están en `ModFxInternalParams.byType` — se cablearon aparte por su paso fraccionario
+ * antes de que existiera esta tabla, y siguen así para no duplicar el control.
  */
-private fun effectTypeOptions(effect: EffectId): List<Pair<Int, String>> = when (effect) {
-    EffectId.BOOST -> BoostType.entries.map { it.value to it.displayName }
-    EffectId.MOD, EffectId.FX -> ModFxType.entries.map { it.value to it.displayName }
-    EffectId.DELAY -> DelayType.entries.map { it.value to it.displayName }
-    EffectId.REVERB -> ReverbType.entries.map { it.value to it.displayName }
-}
-
 @Composable
-private fun EffectColor.displayLabel(): String = when (this) {
-    EffectColor.GREEN -> stringResource(R.string.color_green)
-    EffectColor.RED -> stringResource(R.string.color_red)
-    EffectColor.YELLOW -> stringResource(R.string.color_yellow)
+private fun ModFxGenericParams(
+    activeType: Int?,
+    values: Map<String, Int?>,
+    canEdit: Boolean,
+    onParamChanged: (String, Double) -> Unit,
+    onReadParam: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val type = ModFxType.entries.firstOrNull { it.value == activeType } ?: return
+    val specs = ModFxInternalParams.byType[type].orEmpty()
+    // Los dos tipos que son un ecualizador se dibujan como tal, con la misma UI que EQ1/EQ2
+    // (rediseño de 2026-09-06). ⚠️ Sus escalas **no** son las de EQ1/EQ2 —el gráfico de Mod/FX
+    // es entero sobre ±20 dB, no fraccionario sobre ±12— pero eso lo trae cada `ParamSpec` en
+    // su `kind`, así que los widgets no necesitan saberlo.
+    when (type) {
+        ModFxType.GRAPHIC_EQ -> GraphicEqBars(
+            specs = specs,
+            values = values,
+            canEdit = canEdit,
+            onParamChanged = onParamChanged,
+            modifier = modifier,
+        )
+
+        ModFxType.PARAMETRIC_EQ -> ParametricEqKnobs(
+            specs = specs,
+            values = values,
+            canEdit = canEdit,
+            onParamChanged = onParamChanged,
+            modifier = modifier,
+        )
+
+        else -> TableParams(
+            specs = specs,
+            values = values,
+            canEdit = canEdit,
+            onParamChanged = onParamChanged,
+            onReadParam = onReadParam,
+            modifier = modifier,
+        )
+    }
 }
 
 /**
- * A short list of options as chips.
+ * Un ecualizador **gráfico** como barras verticales, al estilo de Boss Tone Studio.
  *
- * Nothing is selected until the amp says so: with an unconfirmed address the honest state is
- * "unknown", and pre-selecting the first option would look like a value the amp confirmed.
+ * Las bandas y sus frecuencias salen de los [ParamSpec] que se le pasan — no hay ninguna lista
+ * de frecuencias escrita aquí. Eso importa porque hay **dos** gráficos distintos en el proyecto
+ * y no comparten escala: el de EQ1/EQ2 del amplificador va en pasos de 0,5 dB sobre ±12, y el
+ * interno de Mod/FX es entero sobre ±20 (CLAUDE.md §5.2). Cada uno trae la suya en su `kind`.
+ *
+ * Va en un [Row] con scroll horizontal porque once barras no caben en el ancho de un móvil, y
+ * estrecharlas hasta que quepan las volvería imposibles de tocar con el dedo.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChipSelector(
-    label: String,
-    options: List<Pair<Int, String>>,
-    selected: Int?,
-    enabled: Boolean,
-    onSelected: (Int) -> Unit,
+private fun GraphicEqBars(
+    specs: List<ParamSpec>,
+    values: Map<String, Int?>,
+    canEdit: Boolean,
+    onParamChanged: (String, Double) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { (value, name) ->
-                FilterChip(
-                    selected = selected == value,
-                    onClick = { onSelected(value) },
-                    label = { Text(name) },
-                    enabled = enabled,
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .knobAwareHorizontalScroll()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        specs.forEach { spec ->
+            VerticalBarControl(
+                label = spec.label,
+                value = values[spec.label]?.let(spec.kind::rawToDisplay),
+                range = spec.kind.displayBounds,
+                enabled = canEdit,
+                onValueChanged = { value -> onParamChanged(spec.label, value) },
+            )
+        }
+    }
+}
+
+/**
+ * Un ecualizador **paramétrico** como perillas, al estilo de Boss Tone Studio.
+ *
+ * Sirve para los dos paramétricos del proyecto, que tienen **los mismos once parámetros**: el
+ * de EQ1/EQ2 del amplificador (`60 00 00 42`–`4C`) y el tipo `PARAMETRIC_EQ` de Mod/FX
+ * (`60 00 01 2C`–`36`). Verificado en el mapa ya extraído, no supuesto.
+ *
+ * ⚠️ **Las frecuencias y la Q son selectores, no valores continuos**, y aun así van en perilla:
+ * la perilla mueve el **índice** y el texto de debajo enseña la etiqueta real (`1.60k`, `0.5`).
+ * Es lo que hace BTS y lo que hace un paramétrico físico — un desplegable por frecuencia
+ * ocuparía media pantalla para algo que se ajusta al oído, girando.
+ */
+@Composable
+private fun ParametricEqKnobs(
+    specs: List<ParamSpec>,
+    values: Map<String, Int?>,
+    canEdit: Boolean,
+    onParamChanged: (String, Double) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val unknown = stringResource(R.string.debug_connection_unknown_value)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .knobAwareHorizontalScroll()
+            .padding(vertical = 4.dp),
+    ) {
+        specs.forEach { spec ->
+            val raw = values[spec.label]
+            val kind = spec.kind
+            if (kind is ParamKind.Enum) {
+                val index = raw?.let { kind.values.indexOf(it) }?.takeIf { it >= 0 }
+                KnobControl(
+                    label = spec.label,
+                    value = index?.toDouble(),
+                    valueText = index?.let { kind.labels.getOrNull(it) } ?: unknown,
+                    range = 0.0..(kind.values.size - 1).coerceAtLeast(1).toDouble(),
+                    // Un paso es **una posición de la lista**: la perilla trabaja con el
+                    // índice, no con el valor crudo, que puede tener huecos.
+                    step = 1.0,
+                    enabled = canEdit,
+                    onValueChanged = { picked ->
+                        // La perilla da una posición continua; el selector solo acepta uno de
+                        // sus valores, así que se redondea al índice más cercano y se manda
+                        // **el valor crudo de la tabla**, que no tiene por qué ser el índice.
+                        kind.values.getOrNull(picked.roundToInt())?.let { value ->
+                            onParamChanged(spec.label, value.toDouble())
+                        }
+                    },
+                )
+            } else {
+                val display = raw?.let(kind::rawToDisplay)
+                KnobControl(
+                    label = spec.label,
+                    value = display,
+                    valueText = display?.let { "%.1f".format(it) } ?: unknown,
+                    range = kind.displayBounds,
+                    step = kind.displayStep,
+                    enabled = canEdit,
+                    onValueChanged = { value -> onParamChanged(spec.label, value) },
                 )
             }
         }
     }
 }
 
-/** A long list of options behind a button, for the 30 amp models. */
+/**
+ * Renderiza una lista de [ParamSpec] con los widgets que ya existen, eligiendo cada uno por el
+ * [ParamKind] del parámetro.
+ *
+ * Lo comparten los dos bloques que se describen con tabla: los 31 tipos de Mod/FX
+ * ([ModFxGenericParams]) y los dos de EQ ([EqBlock]). La UI sigue sin conocer ninguna
+ * dirección: `ParamSpec` le da etiqueta, rango y opciones, y nada más.
+ */
 @Composable
-private fun DropdownSelector(
-    label: String,
-    options: List<Pair<Int, String>>,
-    selected: Int?,
-    enabled: Boolean,
-    onSelected: (Int) -> Unit,
+private fun TableParams(
+    specs: List<ParamSpec>,
+    values: Map<String, Int?>,
+    canEdit: Boolean,
+    onParamChanged: (String, Double) -> Unit,
+    onReadParam: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val currentName = options.firstOrNull { it.first == selected }?.second
-        ?: stringResource(R.string.debug_connection_unknown_value)
+    Column(modifier = modifier.fillMaxWidth()) {
+        specs.forEach { spec ->
+            val raw = values[spec.label]
+            when (val kind = spec.kind) {
+                is ParamKind.Enum -> {
+                    val options = kind.values.zip(kind.labels)
+                    if (options.size <= 4) {
+                        ChipSelector(
+                            label = spec.label,
+                            options = options,
+                            selected = raw,
+                            enabled = canEdit,
+                            onSelected = { value -> onParamChanged(spec.label, value.toDouble()) },
+                        )
+                    } else {
+                        DropdownSelector(
+                            label = spec.label,
+                            options = options,
+                            selected = raw,
+                            enabled = canEdit,
+                            onSelected = { value -> onParamChanged(spec.label, value.toDouble()) },
+                        )
+                    }
+                }
 
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall)
-        Box {
-            TextButton(onClick = { expanded = true }, enabled = enabled) {
-                Text(currentName)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                options.forEach { (value, name) ->
-                    DropdownMenuItem(
-                        text = { Text(name) },
-                        onClick = {
-                            expanded = false
-                            onSelected(value)
-                        },
+                else -> {
+                    val display = raw?.let(kind::rawToDisplay)
+                    val bounds = kind.displayBounds
+                    LevelControl(
+                        label = "${spec.label}: ${
+                            display?.let { "%.1f".format(it) }
+                                ?: stringResource(R.string.debug_connection_unknown_value)
+                        }",
+                        level = display?.roundToInt(),
+                        enabled = canEdit,
+                        onLevelChanged = { value -> onParamChanged(spec.label, value.toDouble()) },
+                        onRead = { onReadParam(spec.label) },
+                        valueRange = bounds.start.toFloat()..bounds.endInclusive.toFloat(),
                     )
                 }
             }
@@ -1165,136 +1242,370 @@ private fun DropdownSelector(
     }
 }
 
-@Composable
-private fun SwitchRow(
-    label: String,
-    checked: Boolean,
-    enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
-    }
-}
 
 /**
- * Edit mode, shown in **both** sections because it means different things in each: in Logs it
- * is what makes the amp report anything at all, and in Sliders it is what keeps them in sync
- * with the front-panel knobs.
+ * Todo lo que el amplificador tiene y el panel no: Noise Gate, Contour, la posición de los dos
+ * EQ, sus bloques internos, y la cadena de efectos (CLAUDE.md §5).
  *
- * It changes the state of the amplifier, so it stays an explicit, visible control with an
- * obvious way back off — CLAUDE.md §4.2. The two switches are one piece of state, so flipping
- * either moves both.
+ * Va en su **propia sección** y no repartido por las tarjetas de efecto porque no pertenece a
+ * ningún efecto: son ajustes del amplificador que en el panel no tienen dónde vivir, y meterlos
+ * en la tarjeta de, digamos, Reverb sugeriría una relación que no existe.
+ *
+ * ⚠️ Nada de esta sección está confirmado con audio.
  */
 @Composable
-private fun EditModeToggle(
-    editMode: Boolean,
-    enabled: Boolean,
-    onEditModeChanged: (Boolean) -> Unit,
+internal fun NoPanelPane(
+    selectors: Map<SelectorId, Int?>,
+    params: Map<NoPanelParamId, Int?>,
+    contourSlots: List<DebugConnectionViewModel.ContourSlotValues>,
+    eq1Raw: Map<String, Int?>,
+    eq2Raw: Map<String, Int?>,
+    chainSlots: List<Int?>,
+    canEdit: Boolean,
+    onSelectorChanged: (SelectorId, Int) -> Unit,
+    onParamChanged: (NoPanelParamId, Int) -> Unit,
+    onReadParam: (NoPanelParamId) -> Unit,
+    onContourShapeChanged: (Int, Int) -> Unit,
+    onContourFreqShiftChanged: (Int, Int) -> Unit,
+    onReadContourSlot: (Int) -> Unit,
+    onEqParamChanged: (Boolean, String, Double) -> Unit,
+    onReadEqParam: (Boolean, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        SectionHeader(stringResource(R.string.section_no_panel))
         Text(
-            text = stringResource(R.string.debug_connection_edit_mode),
-            style = MaterialTheme.typography.bodyMedium,
+            text = stringResource(R.string.no_panel_notice),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Switch(checked = editMode, onCheckedChange = onEditModeChanged, enabled = enabled)
+
+        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                SwitchRow(
+                    label = stringResource(R.string.noise_gate),
+                    checked = selectors[SelectorId.NOISE_GATE] == SWITCH_ON_VALUE,
+                    enabled = canEdit,
+                    onCheckedChange = { on ->
+                        onSelectorChanged(
+                            SelectorId.NOISE_GATE,
+                            if (on) SWITCH_ON_VALUE else SWITCH_OFF_VALUE,
+                        )
+                    },
+                )
+                NoPanelParamRow(NoPanelParamId.NOISE_GATE_THRESHOLD, params, canEdit, onParamChanged, onReadParam)
+                NoPanelParamRow(NoPanelParamId.NOISE_GATE_RELEASE, params, canEdit, onParamChanged, onReadParam)
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                SwitchRow(
+                    label = stringResource(R.string.contour),
+                    checked = selectors[SelectorId.CONTOUR] == SWITCH_ON_VALUE,
+                    enabled = canEdit,
+                    onCheckedChange = { on ->
+                        onSelectorChanged(
+                            SelectorId.CONTOUR,
+                            if (on) SWITCH_ON_VALUE else SWITCH_OFF_VALUE,
+                        )
+                    },
+                )
+                ChipSelector(
+                    label = stringResource(R.string.contour_select),
+                    options = (0 until KatanaAddresses.CONTOUR_SLOT_COUNT).map { slot ->
+                        slot to stringResource(R.string.contour_slot, slot + 1)
+                    },
+                    selected = selectors[SelectorId.CONTOUR_SELECT],
+                    enabled = canEdit,
+                    onSelected = { value -> onSelectorChanged(SelectorId.CONTOUR_SELECT, value) },
+                )
+                NoPanelParamRow(NoPanelParamId.CONTOUR_FREQ_SHIFT, params, canEdit, onParamChanged, onReadParam)
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = stringResource(R.string.contour_slots_outside_dump),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                contourSlots.forEachIndexed { slot, values ->
+                    Text(
+                        text = stringResource(R.string.contour_slot, slot + 1),
+                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    ChipSelector(
+                        label = stringResource(R.string.contour_slot_shape),
+                        options = KatanaAddresses.CONTOUR_SHAPE_VALUES.map { it to "${it + 1}" },
+                        selected = values.shape,
+                        enabled = canEdit,
+                        onSelected = { value -> onContourShapeChanged(slot, value) },
+                    )
+                    LevelControl(
+                        label = stringResource(
+                            R.string.contour_slot_freq_shift,
+                            values.freqShift?.toString()
+                                ?: stringResource(R.string.debug_connection_unknown_value),
+                        ),
+                        level = values.freqShift,
+                        enabled = canEdit,
+                        onLevelChanged = { value -> onContourFreqShiftChanged(slot, value) },
+                        onRead = { onReadContourSlot(slot) },
+                        valueRange = -50f..50f,
+                    )
+                }
+            }
+        }
+
+        EqBlock(
+            titleRes = R.string.eq1_title,
+            isEq2 = false,
+            positionId = SelectorId.EQ1_POSITION,
+            positionOptions = listOf(
+                0x00 to stringResource(R.string.eq1_position_in),
+                0x01 to stringResource(R.string.eq1_position_out),
+            ),
+            selectors = selectors,
+            values = eq1Raw,
+            canEdit = canEdit,
+            onSelectorChanged = onSelectorChanged,
+            onParamChanged = onEqParamChanged,
+            onReadParam = onReadEqParam,
+        )
+        EqBlock(
+            titleRes = R.string.eq2_title,
+            isEq2 = true,
+            positionId = SelectorId.EQ2_POSITION,
+            positionOptions = listOf(
+                0x00 to stringResource(R.string.eq2_position_in),
+                0x01 to stringResource(R.string.eq2_position_out),
+            ),
+            selectors = selectors,
+            values = eq2Raw,
+            canEdit = canEdit,
+            onSelectorChanged = onSelectorChanged,
+            onParamChanged = onEqParamChanged,
+            onReadParam = onReadEqParam,
+        )
+
+        ChainCard(
+            selectors = selectors,
+            slots = chainSlots,
+            canEdit = canEdit,
+            onSelectorChanged = onSelectorChanged,
+        )
+    }
+}
+
+@Composable
+private fun NoPanelParamRow(
+    id: NoPanelParamId,
+    params: Map<NoPanelParamId, Int?>,
+    canEdit: Boolean,
+    onParamChanged: (NoPanelParamId, Int) -> Unit,
+    onReadParam: (NoPanelParamId) -> Unit,
+) {
+    val value = params[id]
+    LevelControl(
+        label = stringResource(
+            id.labelRes,
+            value?.toString() ?: stringResource(R.string.debug_connection_unknown_value),
+        ),
+        level = value,
+        enabled = canEdit,
+        onLevelChanged = { v -> onParamChanged(id, v) },
+        onRead = { onReadParam(id) },
+        valueRange = id.displayRange.first.toFloat()..id.displayRange.last.toFloat(),
+    )
+}
+
+/**
+ * Uno de los dos bloques de EQ: su posición en la cadena, su on/off, el selector
+ * paramétrico/gráfico y los 22 parámetros de las dos mitades (CLAUDE.md §5, [EqParams]).
+ *
+ * Las dos mitades se muestran **siempre**, pero la que no está seleccionada lleva un aviso: las
+ * 24 direcciones existen a la vez y aceptan escritura, lo que cambia con `Selection` es cuál
+ * suena. Ocultar la mitad inactiva escondería que su valor sigue ahí y se puede editar.
+ */
+@Composable
+private fun EqBlock(
+    @androidx.annotation.StringRes titleRes: Int,
+    isEq2: Boolean,
+    positionId: SelectorId,
+    positionOptions: List<Pair<Int, String>>,
+    selectors: Map<SelectorId, Int?>,
+    values: Map<String, Int?>,
+    canEdit: Boolean,
+    onSelectorChanged: (SelectorId, Int) -> Unit,
+    onParamChanged: (Boolean, String, Double) -> Unit,
+    onReadParam: (Boolean, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Los 24 specs vienen partidos por donde la fuente los parte: 13 de cabecera + paramétrico
+    // (`00 40`–`00 4C`) y 11 del gráfico (`00 4D`–`00 57`).
+    // Los 24 specs vienen partidos por donde la fuente los parte. Aquí se parten una vez más,
+    // por cómo se enseñan: On/Off y Selection son interruptores normales, los once del
+    // paramétrico van en perillas y los once del gráfico en barras (rediseño de 2026-09-06).
+    val header = EqParams.SPECS.take(2)
+    val parametric = EqParams.SPECS.subList(2, 13)
+    val graphic = EqParams.SPECS.drop(13)
+    val selection = values["Selection"]?.let(EqSelection::fromValue)
+
+    Card(modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = stringResource(titleRes),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            ChipSelector(
+                label = stringResource(R.string.eq_position),
+                options = positionOptions,
+                selected = selectors[positionId],
+                enabled = canEdit,
+                onSelected = { value -> onSelectorChanged(positionId, value) },
+            )
+
+            // On/Off y Selection siguen siendo interruptores normales: no son parte de
+            // ninguna de las dos mitades, las eligen.
+            TableParams(
+                specs = header,
+                values = values,
+                canEdit = canEdit,
+                onParamChanged = { label, value -> onParamChanged(isEq2, label, value) },
+                onReadParam = { label -> onReadParam(isEq2, label) },
+            )
+
+            SectionHeader(stringResource(R.string.eq_parametric_header))
+            if (selection == EqSelection.GRAPHIC) {
+                EqInactiveNotice(EqSelection.GRAPHIC)
+            }
+            ParametricEqKnobs(
+                specs = parametric,
+                values = values,
+                canEdit = canEdit,
+                onParamChanged = { label, value -> onParamChanged(isEq2, label, value) },
+            )
+
+            SectionHeader(stringResource(R.string.eq_graphic_header))
+            if (selection == EqSelection.PARAMETRIC) {
+                EqInactiveNotice(EqSelection.PARAMETRIC)
+            }
+            GraphicEqBars(
+                specs = graphic,
+                values = values,
+                canEdit = canEdit,
+                onParamChanged = { label, value -> onParamChanged(isEq2, label, value) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun EqInactiveNotice(active: EqSelection, modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.eq_inactive_half, active.displayName),
+        modifier = modifier.fillMaxWidth().padding(bottom = 4.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/**
+ * La cadena de efectos: las siete cadenas predefinidas, los dos puntos de inserción, y el array
+ * de veinte posiciones (CLAUDE.md §5).
+ *
+ * Las veinte van con [DropdownSelector] y no con chips: son veinte opciones cada una, y veinte
+ * filas de veinte chips no cabrían en ninguna pantalla.
+ */
+@Composable
+private fun ChainCard(
+    selectors: Map<SelectorId, Int?>,
+    slots: List<Int?>,
+    canEdit: Boolean,
+    onSelectorChanged: (SelectorId, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = stringResource(R.string.chain_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            ChipSelector(
+                label = stringResource(R.string.chain_type),
+                options = KatanaAddresses.CHAIN_TYPE_VALUES.map { it to "${it + 1}" },
+                selected = selectors[SelectorId.CHAIN_TYPE],
+                enabled = canEdit,
+                onSelected = { value -> onSelectorChanged(SelectorId.CHAIN_TYPE, value) },
+            )
+            ChipSelector(
+                label = stringResource(R.string.chain_loop_position),
+                options = listOf(
+                    0x00 to stringResource(R.string.chain_loop_post_amp),
+                    0x01 to stringResource(R.string.chain_loop_post_reverb),
+                ),
+                selected = selectors[SelectorId.LOOP_POSITION],
+                enabled = canEdit,
+                onSelected = { value -> onSelectorChanged(SelectorId.LOOP_POSITION, value) },
+            )
+            ChipSelector(
+                label = stringResource(R.string.chain_pedal_fx_position),
+                options = listOf(
+                    0x00 to stringResource(R.string.chain_pedal_fx_input),
+                    0x01 to stringResource(R.string.chain_pedal_fx_post_amp),
+                ),
+                selected = selectors[SelectorId.PEDAL_FX_POSITION],
+                enabled = canEdit,
+                onSelected = { value -> onSelectorChanged(SelectorId.PEDAL_FX_POSITION, value) },
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            ChainDiagram(slots = slots)
+        }
     }
 }
 
 /**
- * One 0..100 level.
+ * El orden real de la cadena, en texto: `INPUT → BOOSTER → MOD → … → SPEAKER`.
  *
- * Deliberately a bare [Slider] — the point is to validate the read / write / cache path
- * against the amp, not the visual design. The GET button sits next to the name so that adding
- * a parameter is one more block and never a row of buttons growing until it overflows.
+ * ❌ **Antes aquí había veinte desplegables para reordenar la cadena a mano, quitados el
+ * 2026-09-06**: el array de permutación (`60 00 06 00`–`06 13`) no se comporta bien contra el
+ * amplificador real. Se ofrece solo el selector de las **siete cadenas predefinidas**
+ * (`60 00 06 20`), que es un valor y no veinte.
  *
- * Disabled until the level is known: a slider that reads 0 because nothing was read yet would
- * send a 0 on first touch and silently change the amp.
+ * ✅ **El orden se sigue leyendo y enseñando**, dibujado **a partir de los valores reales de las
+ * veinte direcciones**: el orden cambia con la cadena elegida, así que una lista fija sería
+ * falsa en seis de los siete casos.
+ *
+ * ⚠️ **Pero no se dibujan los veinte identificadores crudos, sino un vocabulario de diez**
+ * (2026-09-06). Enseñar `CN_S`, `CH_B` o `USB` en un diagrama de señal no informa de nada: son
+ * ruteo interno. El filtro y su justificación viven en [ChainBlock.diagramBlock], no aquí — la
+ * UI sigue sin saber qué significa cada identificador.
+ *
+ * Las ranuras sin leer no se marcan: al filtrar, un hueco es indistinguible de un bloque que no
+ * se dibuja, así que fingir precisión con un `?` sería peor. Si **nada** se ha leído todavía, se
+ * dice explícitamente en vez de enseñar `INPUT → SPEAKER`, que parecería una cadena vacía real.
  */
 @Composable
-private fun LevelControl(
-    label: String,
-    level: Int?,
-    enabled: Boolean,
-    onLevelChanged: (Int) -> Unit,
-    onRead: () -> Unit,
-    modifier: Modifier = Modifier,
-    /**
-     * Every panel/EQ/effect level is `0..100`, so that stays the default. Booster's internal
-     * parameters are not — Drive goes to 120, Bottom/Tone are centered on zero — so this is a
-     * parameter rather than a hardcoded `0f..100f`, without changing any existing caller.
-     */
-    valueRange: ClosedFloatingPointRange<Float> = 0f..100f,
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium)
-            TextButton(onClick = onRead, enabled = enabled) {
-                Text(stringResource(R.string.debug_connection_read_level))
-            }
-        }
-        Slider(
-            value = (level ?: 0).toFloat(),
-            onValueChange = { value -> onLevelChanged(value.roundToInt()) },
-            valueRange = valueRange,
-            enabled = enabled && level != null,
-        )
-    }
-}
-
-/**
- * Same as [LevelControl] but for a [KatanaFractionalParameter][dev.alonx3.ktnacontrol.device.KatanaFractionalParameter]:
- * the value shown and dragged is a `Double`, not an `Int` — CLAUDE.md §5.2, Reverb Time and
- * Mod's 2x2 Chorus Pre Delay, the two parameters whose step needed
- * [FractionalLevelScale][dev.alonx3.ktnacontrol.protocol.FractionalLevelScale].
- *
- * The slider itself still drags continuously in `Float`; quantising to the amp's actual 0.5/0.1
- * step happens once, in `scale.toRaw`, same as every other control — the UI never rounds on its
- * own.
- */
-@Composable
-private fun FractionalLevelControl(
-    label: String,
-    level: Double?,
-    enabled: Boolean,
-    onLevelChanged: (Double) -> Unit,
-    onRead: () -> Unit,
-    valueRange: ClosedFloatingPointRange<Float>,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium)
-            TextButton(onClick = onRead, enabled = enabled) {
-                Text(stringResource(R.string.debug_connection_read_level))
-            }
-        }
-        Slider(
-            value = (level ?: 0.0).toFloat(),
-            onValueChange = { value -> onLevelChanged(value.toDouble()) },
-            valueRange = valueRange,
-            enabled = enabled && level != null,
-        )
-    }
+private fun ChainDiagram(slots: List<Int?>, modifier: Modifier = Modifier) {
+    val blocks = ChainBlock.diagramSequence(slots)
+    Text(
+        text = stringResource(R.string.chain_diagram_title),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        text = if (slots.all { it == null }) {
+            stringResource(R.string.chain_diagram_empty)
+        } else {
+            (listOf(ChainDiagramBlock.INPUT) + blocks.map { it.displayName } +
+                ChainDiagramBlock.SPEAKER).joinToString(" → ")
+        },
+        modifier = modifier.fillMaxWidth().padding(top = 4.dp),
+        style = MaterialTheme.typography.bodyMedium,
+    )
 }
 
 /**
@@ -1450,6 +1761,15 @@ private fun DebugConnectionScreenPreview() {
             onBoosterSoloEnabledChanged = {},
             onAmpSoloLevelChanged = {},
             onReadAmpSoloLevelClicked = {},
+            diagnostics = SoloDiagnostics(
+                panelEnabled = null,
+                panelLevel = null,
+                onPanelEnabledChanged = {},
+                onPanelLevelChanged = {},
+                onReadPanelClicked = {},
+                onProbeSoloPreamp = {},
+                onProbeSoloPanel = {},
+            ),
             onDelayParamChanged = { _, _ -> },
             onReadDelayParamClicked = {},
             onReverbParamChanged = { _, _ -> },
@@ -1460,6 +1780,46 @@ private fun DebugConnectionScreenPreview() {
             onReadModChorusPreDelayLowClicked = {},
             onModChorusPreDelayHighChanged = {},
             onReadModChorusPreDelayHighClicked = {},
+            modInternalRaw = mapOf(
+                ModFxType.CHORUS to mapOf("Low" to 60, "High" to 70),
+            ),
+            fxInternalRaw = mapOf(
+                ModFxType.PHASER to mapOf("Rate" to 50, "Depth" to 60),
+            ),
+            noPanelParams = NoPanelParamId.entries.associateWith { 50 },
+            contourSlotValues = List(3) { DebugConnectionViewModel.ContourSlotValues(0, 0) },
+            eq1Raw = mapOf("On/Off" to 1, "Selection" to 0, "Low Gain" to 20),
+            eq2Raw = mapOf("On/Off" to 0, "Selection" to 1, "31Hz" to 24),
+            chainSlotValues = List(20) { it },
+            onNoPanelParamChanged = { _, _ -> },
+            onReadNoPanelParamClicked = {},
+            onContourShapeChanged = { _, _ -> },
+            onContourFreqShiftChanged = { _, _ -> },
+            onReadContourSlotClicked = {},
+            onEqParamChanged = { _, _, _ -> },
+            onReadEqParamClicked = { _, _ -> },
+            presetSaveInFlight = false,
+            onSavePreset = { _, _ -> },
+            // La preview no habla con ningún amplificador: `canSend = false` deja el botón de
+            // enviar apagado y con su explicación, que es justo lo que se ve sin cable.
+            presetSend = PresetSendControls(
+                state = PresetSendState.Idle,
+                canSend = false,
+                onRequest = { _, _ -> },
+                onContinue = {},
+                onBack = {},
+                onCancel = {},
+                onConfirmed = {},
+                onResultShown = {},
+            ),
+            onModParamChanged = { _, _, _ -> },
+            onReadModParamClicked = { _, _ -> },
+            onFxParamChanged = { _, _, _ -> },
+            onReadFxParamClicked = { _, _ -> },
+            reloadInFlight = false,
+            onRefreshClicked = {},
+            exportInFlight = false,
+            onExportPreset = {},
             onCopyLog = {},
         )
     }
@@ -1467,3 +1827,173 @@ private fun DebugConnectionScreenPreview() {
 
 /** Label the system shows for the copied log. */
 private const val CLIP_LABEL = "KTNA Control log"
+
+// --- Bloque de diagnóstico temporal (CLAUDE.md §5) -------------------------------------------
+//
+// Tres controles no tuvieron ningún efecto al probarlos con el amplificador: el Solo del
+// amplificador (switch + level), Bright y Gain SW. Esto instrumenta las dos preguntas que hay
+// que contestar antes de tocar nada:
+//
+//  1. **Solo**: de las dos direcciones candidatas, ¿responde la otra? La candidata 1 (PREAMP,
+//     `60 00 00 2B`/`2C`) sigue cableada como control normal más arriba y no se toca; aquí va
+//     la candidata 2 (panel, `60 00 06 14`/`15`), aparte.
+// ✅ **La segunda pregunta ya está contestada (2026-09-06) y su instrumentación se quitó**:
+// Bright (`60 00 00 29`) y Gain SW (`60 00 00 2A`) no mueven ni el sonido ni el estado interno,
+// así que salieron también de la UI de producto. Ver BACKLOG.md.
+//
+// Es material de investigación, no de producto: se quita cuando la pregunta que queda esté
+// contestada con audio.
+
+/**
+ * Estado y acciones del bloque de diagnóstico, agrupados en un objeto.
+ *
+ * Juntos porque [AmpScreen] ya recibe treinta y tantos parámetros sueltos, y estos nueve
+ * llegan juntos y se van juntos el día que se quite el bloque.
+ */
+data class SoloDiagnostics(
+    val panelEnabled: Int?,
+    val panelLevel: Int?,
+    val onPanelEnabledChanged: (Boolean) -> Unit,
+    val onPanelLevelChanged: (Int) -> Unit,
+    val onReadPanelClicked: () -> Unit,
+    val onProbeSoloPreamp: (Boolean) -> Unit,
+    val onProbeSoloPanel: (Boolean) -> Unit,
+)
+
+@Composable
+internal fun DiagnosticsCard(
+    diagnostics: SoloDiagnostics,
+    canEdit: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            SectionHeader(stringResource(R.string.diag_section))
+
+            Text(
+                text = stringResource(R.string.diag_solo_caption),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            SwitchRow(
+                label = stringResource(R.string.diag_solo_panel),
+                checked = diagnostics.panelEnabled == SWITCH_ON_VALUE,
+                enabled = canEdit,
+                onCheckedChange = diagnostics.onPanelEnabledChanged,
+            )
+            LevelControl(
+                label = stringResource(
+                    R.string.diag_solo_panel_level,
+                    diagnostics.panelLevel?.toString()
+                        ?: stringResource(R.string.debug_connection_unknown_value),
+                ),
+                level = diagnostics.panelLevel,
+                enabled = canEdit,
+                onLevelChanged = diagnostics.onPanelLevelChanged,
+                onRead = diagnostics.onReadPanelClicked,
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.diag_probe_caption),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            // Los dos valores de cada switch, porque una sola prueba no distingue nada si el
+            // amplificador ya estaba en ese valor — ver `WriteProbe.verdict`.
+            ProbeRow(
+                firstLabel = stringResource(R.string.diag_probe_solo1_on),
+                onFirst = { diagnostics.onProbeSoloPreamp(true) },
+                secondLabel = stringResource(R.string.diag_probe_solo1_off),
+                onSecond = { diagnostics.onProbeSoloPreamp(false) },
+                enabled = canEdit,
+            )
+            ProbeRow(
+                firstLabel = stringResource(R.string.diag_probe_solo2_on),
+                onFirst = { diagnostics.onProbeSoloPanel(true) },
+                secondLabel = stringResource(R.string.diag_probe_solo2_off),
+                onSecond = { diagnostics.onProbeSoloPanel(false) },
+                enabled = canEdit,
+            )
+        }
+    }
+}
+
+/** Dos botones de prueba en una fila: el mismo parámetro con sus dos valores. */
+@Composable
+private fun ProbeRow(
+    firstLabel: String,
+    onFirst: () -> Unit,
+    secondLabel: String,
+    onSecond: () -> Unit,
+    enabled: Boolean,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+    ) {
+        OutlinedButton(
+            onClick = onFirst,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+        ) { Text(firstLabel) }
+        OutlinedButton(
+            onClick = onSecond,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+        ) { Text(secondLabel) }
+    }
+}
+
+@Composable
+private fun EffectColor.displayLabel(): String = when (this) {
+    EffectColor.GREEN -> stringResource(R.string.color_green)
+    EffectColor.RED -> stringResource(R.string.color_red)
+    EffectColor.YELLOW -> stringResource(R.string.color_yellow)
+}
+
+/**
+ * El catálogo de tipos de un efecto.
+ *
+ * Mod y FX comparten tabla porque **son la misma lista** en las dos fuentes de Mk2, no por
+ * ahorrar código: ver [ModFxType].
+ */
+private fun effectTypeOptions(effect: EffectId): List<Pair<Int, String>> = when (effect) {
+    EffectId.BOOST -> BoostType.entries.map { it.value to it.displayName }
+    EffectId.MOD, EffectId.FX -> ModFxType.entries.map { it.value to it.displayName }
+    EffectId.DELAY -> DelayType.entries.map { it.value to it.displayName }
+    EffectId.REVERB -> ReverbType.entries.map { it.value to it.displayName }
+}
+
+/**
+ * Edit mode, shown in **both** sections because it means different things in each: in Logs it
+ * is what makes the amp report anything at all, and in Sliders it is what keeps them in sync
+ * with the front-panel knobs.
+ *
+ * It changes the state of the amplifier, so it stays an explicit, visible control with an
+ * obvious way back off — CLAUDE.md §4.2. The two switches are one piece of state, so flipping
+ * either moves both.
+ */
+@Composable
+internal fun EditModeToggle(
+    editMode: Boolean,
+    enabled: Boolean,
+    onEditModeChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.debug_connection_edit_mode),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Switch(checked = editMode, onCheckedChange = onEditModeChanged, enabled = enabled)
+    }
+}

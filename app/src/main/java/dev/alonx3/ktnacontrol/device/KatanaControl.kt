@@ -117,6 +117,44 @@ sealed class KatanaControl(
     }
 
     /**
+     * **Diagnóstico: escribe y vuelve a leer inmediatamente, sin caché optimista.**
+     *
+     * Existe para una pregunta concreta que el camino normal no puede contestar: cuando un
+     * control no produce ningún efecto audible, ¿es que **la dirección es correcta y el
+     * parámetro no hace nada** (un remanente inerte del firmware), o es que **la dirección no
+     * acepta la escritura en absoluto** (está mal identificada)? Las dos se ven igual desde
+     * fuera; solo un GET inmediato después del SET las separa.
+     *
+     * Es el mismo chequeo que resolvió `60 00 05 48` con el nivel de reverb (CLAUDE.md §5,
+     * "Cómo encontrar la dirección de un parámetro").
+     *
+     * Se aparta del camino normal en tres cosas, y las tres son deliberadas:
+     *
+     * - **No actualiza la caché con el valor pedido.** [set] es optimista porque la UI tiene
+     *   que responder al dedo; aquí eso falsearía el resultado. Solo el GET mueve [state].
+     * - **No aplica el debounce**: espera a que el SET salga de verdad antes de leer.
+     * - **Cancela cualquier escritura pendiente**, para que un valor a medio enviar no se
+     *   cuele entre el SET y el GET y contamine la lectura.
+     *
+     * ⚠️ No es un camino de producción: nada de la UI normal debería llamarlo.
+     *
+     * @return el resultado de la prueba, o null si [value] no es válido para este control.
+     */
+    suspend fun probeWrite(value: Int): WriteProbe? {
+        val accepted = coerce(value) ?: run {
+            onDiagnostic("PROBE $address = $value: valor no válido para este control")
+            return null
+        }
+        pendingWrite?.cancel()
+        pendingWrite = null
+
+        val before = read()
+        val sent = link.send(RolandSysEx.set(address, MidiBytes.encode(accepted, byteWidth)))
+        val after = read()
+        return WriteProbe(address = address, before = before, requested = accepted, sent = sent, after = after)
+    }
+
+    /**
      * Applies a message the amp sent on its own, if it is for this control.
      *
      * **Never sends anything**: that is the anti-echo rule of CLAUDE.md §4.2, and it lives
@@ -294,4 +332,46 @@ class KatanaEnumParameter internal constructor(
 
     /** Whether [value] is one of the [options] this control offers. */
     fun accepts(value: Int): Boolean = value in options
+}
+
+/**
+ * Lo que devuelve [KatanaControl.probeWrite]: el estado interno del amplificador antes y
+ * después de un SET, para poder distinguir "no acepta la escritura" de "acepta y no suena".
+ */
+data class WriteProbe(
+    val address: Address,
+    /** Lo que el amp decía tener antes del SET, o null si no contestó al GET. */
+    val before: Int?,
+    /** El valor que se le pidió, ya pasado por `coerce`. */
+    val requested: Int,
+    /** Si el SET llegó a salir por el cable. */
+    val sent: Boolean,
+    /** Lo que el amp dice tener después del SET, o null si no contestó al GET. */
+    val after: Int?,
+) {
+
+    /** El amplificador contestó a los dos GET: la dirección está viva para lectura. */
+    val readable: Boolean get() = before != null && after != null
+
+    /** El amp se quedó con lo que se le pidió — la escritura sí entró en su estado interno. */
+    val accepted: Boolean get() = after == requested
+
+    /**
+     * Cómo leer el resultado, en una línea, para el log de diagnóstico.
+     *
+     * Las cuatro conclusiones son las que separan las hipótesis de CLAUDE.md §5:
+     * - **no contesta al GET** → la dirección no es legible; probablemente mal identificada.
+     * - **el valor cambió a lo pedido** → la escritura entra. Si además no suena, es un
+     *   parámetro inerte, no una dirección equivocada.
+     * - **el valor no se movió** → acepta el mensaje y lo descarta: dirección de solo lectura,
+     *   el mismo patrón de `60 00 06 5C` (la variación).
+     * - **ya estaba en ese valor** → la prueba no distingue nada; repetirla con otro valor.
+     */
+    val verdict: String get() = when {
+        !sent -> "el SET no salió por el cable"
+        !readable -> "el amp no contesta al GET de esta dirección"
+        before == requested -> "ya estaba en $requested: prueba no concluyente, repetir con otro valor"
+        accepted -> "el valor interno cambió $before → $after: la escritura SÍ entra"
+        else -> "el valor interno NO se movió (sigue en $after): la dirección ignora la escritura"
+    }
 }

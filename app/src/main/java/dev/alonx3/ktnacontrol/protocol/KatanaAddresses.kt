@@ -332,7 +332,17 @@ object KatanaAddresses {
     /**
      * **Bright, `60 00 00 29`.** On/off: usa [SWITCH_VALUES].
      *
-     * ⚠️ Implementado, sin confirmar (ver BACKLOG.md, "Pendiente por probar"). Sale del
+     * ❌ **Probado contra el amplificador el 2026-09-06: sin efecto.** Ni cambia el sonido ni
+     * mueve el estado interno — el SET+GET inmediato de [dev.alonx3.ktnacontrol.device.WriteProbe]
+     * dice que el valor no se movió. **Retirado de la UI**: un control que acepta el gesto y no
+     * hace nada es peor que ninguno.
+     *
+     * ⚠️ **La dirección se conserva registrada a propósito, no borrada.** El precedente del
+     * nivel de reverb (CLAUDE.md §5) es que una dirección plausible puede estar simplemente mal
+     * identificada, y el día que aparezca otra candidata conviene tener esta documentada para
+     * saber qué ya se descartó. Ver BACKLOG.md.
+     *
+     * Sale del
      * bloque PREAMP (`60 00 00 21`–`2C`): `midi.xml:37483` la nombra `PREAMP: Bright`, con
      * `00` Off / `01` On. Es la única fuente — ninguna otra documenta este bloque para el
      * Mk2 (ver BACKLOG.md, "Cambiar el tipo de amplificador no recarga nada").
@@ -345,11 +355,15 @@ object KatanaAddresses {
     /**
      * **Gain SW, `60 00 00 2A`.** Tres posiciones: usa [GAIN_SW_VALUES].
      *
-     * ⚠️ Implementado, sin confirmar. `midi.xml:37487` la nombra `PREAMP: Gain SW` con tres
+     * ❌ **Probado contra el amplificador el 2026-09-06: sin efecto**, igual que [AMP_BRIGHT] y
+     * con el mismo método. **Retirado de la UI**; la dirección se conserva por la misma razón
+     * que allí. Ver BACKLOG.md.
+     *
+     * `midi.xml:37487` la nombra `PREAMP: Gain SW` con tres
      * valores literales `Low` / `Middle` / `High` (`00`/`01`/`02`) — probablemente el rango
      * de la perilla GAIN, a la manera de un selector de "gama" del preamp, pero ninguna
-     * fuente lo explica más allá del nombre; la prueba de audio tendrá que decir qué cambia
-     * exactamente. Ver BACKLOG.md, "Pendiente por probar".
+     * fuente lo explica más allá del nombre — y la prueba de audio acabó diciendo que no cambia
+     * nada.
      */
     val AMP_GAIN_SW = Address(0x60, 0x00, 0x00, 0x2A)
 
@@ -373,6 +387,37 @@ object KatanaAddresses {
      * concepto que [BOOST_SOLO_LEVEL] pero a nivel de preamp.
      */
     val AMP_SOLO_LEVEL = Address(0x60, 0x00, 0x00, 0x2C)
+
+    /**
+     * **Solo Sw del amplificador — SEGUNDA CANDIDATA, `60 00 06 14`.** Solo diagnóstico.
+     *
+     * ⚠️ **No sustituye a [AMP_SOLO_ENABLED]; convive con ella a propósito.** La
+     * investigación de "Controles sin perilla física" (CLAUDE.md §5) encontró **dos**
+     * direcciones plausibles para el Solo del amplificador y ninguna fuente que desempatara:
+     * esta, en el bloque `panel` (`midi.xml:43514`, `name="Solo"` `desc="Solo"`
+     * `customdesc="On/Off"`), y la del bloque PREAMP (`midi.xml:37492`), que es la que está
+     * cableada como control normal. **La del PREAMP se probó con el amplificador y no hizo
+     * nada**, así que toca instrumentar esta.
+     *
+     * Es el mismo procedimiento que costó tres candidatas con el nivel de reverb (§5, "Cómo
+     * encontrar la dirección de un parámetro"): el proyecto no elige por analogía, prueba las
+     * dos y deja que el oído decida.
+     *
+     * A favor de esta: vive en el bloque `06 xx`, donde están las once perillas y los cinco
+     * selectores de color confirmados por audio. En contra: ese mismo bloque contiene
+     * [AMP_VARIATION] (`06 5C`), que resultó ser de **solo lectura** — la vecindad no es
+     * garantía de nada.
+     */
+    val AMP_SOLO_ENABLED_PANEL = Address(0x60, 0x00, 0x06, 0x14)
+
+    /**
+     * **Solo Level del amplificador — SEGUNDA CANDIDATA, `60 00 06 15`.** Solo diagnóstico.
+     *
+     * Escala directa `00/64` = 0..100 ([PANEL_LEVEL_SCALE]), igual que su gemela
+     * [AMP_SOLO_LEVEL]. `midi.xml:43518` la da como `name="Solo"` `customdesc="Level"` con
+     * `range 00/64/00/100`. Ver [AMP_SOLO_ENABLED_PANEL] para por qué hay dos.
+     */
+    val AMP_SOLO_LEVEL_PANEL = Address(0x60, 0x00, 0x06, 0x15)
 
     /**
      * **Variación del amplificador (el LED "VARIATION"), `60 00 06 5C` — SOLO LECTURA.**
@@ -1043,6 +1088,210 @@ object KatanaAddresses {
 
     /** Payload that turns [EDIT_MODE] off. */
     const val EDIT_MODE_OFF: Byte = 0x00
+
+    /**
+     * **Nombre del preset en uso, `60 00 00 00`, 16 bytes ASCII.** Paso 1 del guardado
+     * (CLAUDE.md §5, "Guardado de presets"); ver [dev.alonx3.ktnacontrol.protocol.PresetSave].
+     *
+     * Es **la misma dirección que [MEMORY_DUMP]**, y eso no es un descuido: los 16 primeros
+     * bytes del bloque efectivo son el nombre, y el dump empieza justo ahí. Tiene nombre propio
+     * porque `MEMORY_DUMP` se lee como "el principio del volcado" y aquí se usa como "dónde va
+     * el nombre" — pedirle a alguien que escriba un nombre en `MEMORY_DUMP` invita a pensar que
+     * se está pisando el dump entero.
+     *
+     * Tres fuentes coinciden en que el nombre va aquí: `katana_sysex.txt:145-147`
+     * ("Send name of amp first"), `renameWidget.cpp:68` (FxFloorboard, que lo escribe como un
+     * parámetro más) y `presets_addrs.yaml:1-3` (`UserPatch%PatchName`, `size 16`).
+     */
+    val CURRENT_PRESET_NAME = MEMORY_DUMP
+
+    /**
+     * **Commit del guardado, `7F 00 01 04`.** Paso 2: copia el estado editado al canal cuyo
+     * número va en el dato. Ver [dev.alonx3.ktnacontrol.protocol.PresetSave].
+     *
+     * ✅ Confirmado para el **Mk2** en código, no por analogía con el MK1:
+     * `reference/FxFloorboard/patchWriteDialog.cpp:346` manda
+     * `F0 41 00 00 00 00 33 12 7F 00 01 04 00 <canal> <checksum> F7`.
+     *
+     * ⚠️ **Destructivo e irreversible**, y **fire-and-forget**: no hay respuesta que esperar.
+     */
+    val PRESET_SAVE = Address(0x7F, 0x00, 0x01, 0x04)
+
+    /**
+     * El dato de [PRESET_SAVE] son **2 bytes** (`00 xx`), como el canal activo de §5.1.
+     *
+     * ⚠️ La tabla de §5 lo describió un tiempo como `xx = 01..04`, que es el rango del **MK1**
+     * copiado tal cual de `katana_sysex.txt:150-155`, cuando el amplificador tenía cuatro
+     * canales. En el Mk2 llega hasta `08`.
+     */
+    const val PRESET_SAVE_SIZE = 2
+
+    // --- Controles sin perilla física (CLAUDE.md §5) ---------------------------------------
+    //
+    // ⚠️ Implementados el 2026-09-06, **pendientes de confirmar con audio**. Todos salen de
+    // `reference/FxFloorboard/midi.xml`, la única fuente de Mk2 que los cubre: ni
+    // `Adresses.txt` ni los `*.yaml` de TuxKatana los mencionan, y `katana-midi-bridge` es MK1
+    // (corrobora estructura, nunca direcciones).
+    //
+    // Su rasgo común es que no tienen perilla en el panel, así que no se pueden descubrir
+    // girando algo y mirando qué reporta el amplificador — que es como se confirmaron los once
+    // niveles. La prueba tiene que ser al revés: escribir y escuchar.
+
+    /**
+     * **Noise Gate On/Off, `60 00 05 66`.** On/off: usa [SWITCH_VALUES].
+     *
+     * `midi.xml:43022`, bloque `desc="NS:"` — Boss lo llama *Noise Suppressor*; "Noise Gate" es
+     * el nombre que usa la spec del MK1.
+     *
+     * ✅ **La estructura la corrobora el MK1 por partida doble, con otra dirección**:
+     * `katana-midi-bridge/parameters/amplifier.json:106-127` define `noiseGate` con
+     * `baseAddr [96,0,6,99]` (= `60 00 06 63`), `length: 3` y exactamente estos tres campos.
+     * Es el caso de libro de CLAUDE.md §5.2: la estructura transfiere del MK1, la dirección no
+     * (`06 63` → `05 66`).
+     */
+    val NOISE_GATE_ENABLED = Address(0x60, 0x00, 0x05, 0x66)
+
+    /** **Noise Gate Threshold, `60 00 05 67`.** `00/64` = 0..100: [PANEL_LEVEL_SCALE]. */
+    val NOISE_GATE_THRESHOLD = Address(0x60, 0x00, 0x05, 0x67)
+
+    /** **Noise Gate Release, `60 00 05 68`.** `00/64` = 0..100: [PANEL_LEVEL_SCALE]. */
+    val NOISE_GATE_RELEASE = Address(0x60, 0x00, 0x05, 0x68)
+
+    /** **Contour On/Off, `60 00 06 16`.** On/off: usa [SWITCH_VALUES]. `midi.xml:43521`. */
+    val CONTOUR_ENABLED = Address(0x60, 0x00, 0x06, 0x16)
+
+    /**
+     * **Contour Select, `60 00 06 17`.** Cuál de los tres slots está activo:
+     * [CONTOUR_SELECT_VALUES]. `midi.xml:43525`.
+     */
+    val CONTOUR_SELECT = Address(0x60, 0x00, 0x06, 0x17)
+
+    /** Los tres valores de [CONTOUR_SELECT]: `00` Contour 1, `01` Contour 2, `02` Contour 3. */
+    val CONTOUR_SELECT_VALUES: List<Int> = listOf(0x00, 0x01, 0x02)
+
+    /**
+     * **Contour Freq Shift del slot activo, `60 00 06 1A`.** Escala centrada `-50..+50`
+     * ([CONTOUR_FREQ_SHIFT_SCALE]). `midi.xml:43544`, `range 00/64/-50/+50`.
+     *
+     * Es el mismo parámetro que el `Freq Shift` de cada slot ([contourSlot]), visto desde el
+     * slot que esté seleccionado — no una dirección aparte con otro significado.
+     */
+    val CONTOUR_FREQ_SHIFT = Address(0x60, 0x00, 0x06, 0x1A)
+
+    /** Escala de los Freq Shift de Contour: `00/64/-50/+50`, centrada. */
+    val CONTOUR_FREQ_SHIFT_SCALE: LevelScale = LevelScale.centered(50)
+
+    /** Los cuatro valores de un `Contour Shape`: `00`..`03`. `midi.xml:50135`. */
+    val CONTOUR_SHAPE_VALUES: List<Int> = listOf(0x00, 0x01, 0x02, 0x03)
+
+    /** Cuántos slots de Contour hay. */
+    const val CONTOUR_SLOT_COUNT = 3
+
+    /**
+     * Las dos direcciones del slot de Contour [slot] (0-based): Shape y Freq Shift.
+     *
+     * Los tres slots van de 8 en 8 desde `60 00 0F 30` — `midi.xml:50135` (`0F 30`/`31`),
+     * `:50150` (`0F 38`/`39`) y `:50165` (`0F 40`/`41`).
+     *
+     * ⚠️ **Estas seis direcciones caen FUERA del dump** y son las primeras del proyecto que lo
+     * hacen. El dump pide `60 00 00 00` + 1920 bytes, o sea hasta `60 00 0E 7F`, y el
+     * amplificador real devolvió menos todavía (hasta `60 00 0E 43`, CLAUDE.md §4.4); estas
+     * están en el offset 1968-1985. Se poblarán por el **GET individual de respaldo** que
+     * `KatanaRepository.loadFromDump` ya hace para lo que el dump no cubre — no es código
+     * nuevo, pero sí la primera vez que ese camino es el único que puede funcionar para un
+     * control, así que es lo primero a comprobar al probarlos.
+     *
+     * ⚠️ **Discrepancia de fuentes sin resolver**: la aritmética de offsets de FxFloorboard
+     * (`sysxWriter.cpp`) da `0F 2E`/`36`/`3E`, dos menos, para estos tres bloques. Se
+     * documentan las de `midi.xml` porque son una afirmación directa (`<DATA value="30" …
+     * desc="Contour 1:">`) frente a una aritmética, y porque esa misma aritmética ya falla en
+     * otro sitio (`GafcExp1AsgnMinMax`, CLAUDE.md §5 "Formato `.tsl`"). **TBD.**
+     */
+    fun contourSlot(slot: Int): Pair<Address, Address> {
+        require(slot in 0 until CONTOUR_SLOT_COUNT) {
+            "el slot de contour debe estar entre 0 y ${CONTOUR_SLOT_COUNT - 1}, era $slot"
+        }
+        val shape = Address(0x60, 0x00, 0x0F, 0x30 + slot * 8)
+        return shape to Address(0x60, 0x00, 0x0F, 0x31 + slot * 8)
+    }
+
+    /**
+     * **Posición de EQ1 en la cadena, `60 00 06 22`.** Dos valores: [EQ1_POSITION_VALUES].
+     *
+     * `midi.xml:43559` (`desc="EQ" customdesc="Postion"`, `00` Amp In / `01` Amp Out), y la
+     * tabla de destinos de asignación en `:3967` lo nombra literalmente
+     * `"Signal chain position: EQ1"`.
+     *
+     * ⚠️ **Son dos valores, no tres.** Es la diferencia con casi todos los demás selectores del
+     * proyecto; el que sí tiene cuatro posiciones (Input / Output / Line Out Only / Speaker Out
+     * Only) es el EQ **global**, que vive en otro espacio de direcciones y no es por preset.
+     */
+    val EQ1_POSITION = Address(0x60, 0x00, 0x06, 0x22)
+
+    /** `00` Amp In, `01` Amp Out. */
+    val EQ1_POSITION_VALUES: List<Int> = listOf(0x00, 0x01)
+
+    /**
+     * **Posición de EQ2 en la cadena, `60 00 06 19`.** Dos valores: [EQ2_POSITION_VALUES].
+     *
+     * `midi.xml:43540` (`desc="EQ2:" customdesc="Postion"`), asignación en `:3968`.
+     *
+     * ⚠️ Las etiquetas dicen lo mismo que las de EQ1 con otras palabras — "PreAmp In" / "Pre
+     * Amp Out" contra "Amp In" / "Amp Out" —, y la fuente escribe "Postion" en los dos sitios.
+     * Es cosmético: el rango es `00`/`01` en ambos y la tabla de asignación los llama a los dos
+     * "Signal chain position".
+     */
+    val EQ2_POSITION = Address(0x60, 0x00, 0x06, 0x19)
+
+    /** `00` PreAmp In, `01` Pre Amp Out. */
+    val EQ2_POSITION_VALUES: List<Int> = listOf(0x00, 0x01)
+
+    /**
+     * **Tipo de cadena, `60 00 06 20`.** Siete cadenas predefinidas: [CHAIN_TYPE_VALUES].
+     *
+     * `midi.xml:43552`, `range 00/06/00/06`. La fuente lo declara como rango y no como lista de
+     * opciones con nombre, pero lo que selecciona es una de siete configuraciones fijas, no un
+     * nivel continuo — de ahí que se registre como selector (CLAUDE.md §4.3: lo que muestra es
+     * una elección, no un número en una escala).
+     *
+     * Convive con [chainSlot]: este es el control grueso (elegir entre siete cadenas hechas) y
+     * el array de veinte es el fino (poner cada bloque donde se quiera).
+     */
+    val CHAIN_TYPE = Address(0x60, 0x00, 0x06, 0x20)
+
+    /** Las siete cadenas predefinidas de [CHAIN_TYPE]: `00`..`06`. */
+    val CHAIN_TYPE_VALUES: List<Int> = (0x00..0x06).toList()
+
+    /**
+     * **Posición del loop de send/return, `60 00 06 21`.** `00` Post Amp, `01` Post Reverb.
+     * `midi.xml:43555`, asignación en `:3969`.
+     */
+    val LOOP_POSITION = Address(0x60, 0x00, 0x06, 0x21)
+
+    /** `00` Post Amp, `01` Post Reverb. */
+    val LOOP_POSITION_VALUES: List<Int> = listOf(0x00, 0x01)
+
+    /**
+     * **Posición del Pedal/FX, `60 00 06 23`.** `00` Input, `01` Post Amp. `midi.xml:43563`.
+     */
+    val PEDAL_FX_POSITION = Address(0x60, 0x00, 0x06, 0x23)
+
+    /** `00` Input, `01` Post Amp. */
+    val PEDAL_FX_POSITION_VALUES: List<Int> = listOf(0x00, 0x01)
+
+    /**
+     * La posición [slot] (0-based) de la cadena de efectos, `60 00 06 00`–`06 13`.
+     *
+     * Cada una es un selector de los 20 identificadores de [ChainBlock], y el conjunto es una
+     * **permutación**: el orden de los valores es el orden de la cadena. Ver [ChainBlock] para
+     * la verificación de que las 20 posiciones ofrecen el mismo catálogo.
+     */
+    fun chainSlot(slot: Int): Address {
+        require(slot in 0 until ChainBlock.SLOT_COUNT) {
+            "la posición de la cadena debe estar entre 0 y ${ChainBlock.SLOT_COUNT - 1}, era $slot"
+        }
+        return Address(0x60, 0x00, 0x06, 0x00 + slot)
+    }
 
     /**
      * The three colour slots of one effect, starting at [greenByte] in the `60 00 06 xx`

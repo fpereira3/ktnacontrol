@@ -45,7 +45,15 @@ object RolandSysEx {
     const val END_OF_EXCLUSIVE = 0xF7
 
     /** Header + command + address + checksum + terminator, i.e. everything but the payload. */
-    private const val OVERHEAD = 7 + 1 + Address.SIZE + 1 + 1
+    const val OVERHEAD = 7 + 1 + Address.SIZE + 1 + 1
+
+    /**
+     * Cuántos bytes de datos lleva un mensaje ya formado: todo menos [OVERHEAD].
+     *
+     * Para contar lo que se ha escrito de verdad sin volver a partir el payload por fuera.
+     * Negativo es imposible en un mensaje válido, así que se recorta a 0.
+     */
+    fun payloadSizeOf(message: ByteArray): Int = (message.size - OVERHEAD).coerceAtLeast(0)
 
     /**
      * Builds a query: "send me [size] bytes starting at [address]".
@@ -60,6 +68,54 @@ object RolandSysEx {
     fun set(address: Address, data: ByteArray): ByteArray {
         require(MidiBytes.isSevenBit(data)) { "los datos deben ser bytes de 7 bits" }
         return build(COMMAND_SET, address, data)
+    }
+
+    /**
+     * Cuántos bytes de datos lleva como mucho un SET, y por qué **128** y no otro número.
+     *
+     * ⚠️ **Es criterio propio, apoyado en un precedente; ninguna fuente dice cuál es el máximo
+     * que acepta el amplificador** (CLAUDE.md §5, "Formato `.tsl`" → TBD). Lo que sí hay es el
+     * único tamaño de SET masivo que se observa en una fuente de Mk2: el volcado de patch de
+     * `reference/FxFloorboard/sysxWriter.cpp:377-390` es una tira de mensajes de **128 bytes de
+     * datos cada uno** (12 de cabecera + 128 + checksum + `F7` = 142). Si el editor de PC parte
+     * ahí, 128 es el tamaño del que se sabe que alguien habla con este amplificador.
+     *
+     * ⚠️ **Y NO es un límite del transporte**, aunque CLAUDE.md lo dijera: un SET de 221 bytes
+     * son `14 + 221 = 235` bytes de mensaje, que empaquetados en tramas USB-MIDI de 4 bytes dan
+     * `ceil(235/3) × 4 = 316` bytes en el cable — **caben de sobra** en los 512 de
+     * `wMaxPacketSize` (§4.1). Así que trocear no lo obliga el USB; lo aconseja no ser el
+     * primero en probar si el amplificador digiere un SET de 221 bytes de una sentada.
+     */
+    const val MAX_SET_PAYLOAD = 128
+
+    /**
+     * El mismo SET de [set], partido en varios mensajes cuando [data] pasa de [chunkSize].
+     *
+     * Cada trozo va a **su propia dirección**: la del anterior más su longitud, con el acarreo
+     * en base 128 que hace [Address.plus]. Eso importa de verdad aquí — los bloques largos de
+     * un `.tsl` cruzan el límite de página: `UserPatch%Fx(1)` empieza en `60 00 01 00` y su
+     * segundo trozo cae en `60 00 02 00`, no en `60 00 01 80`, que ni siquiera es una dirección
+     * legal.
+     *
+     * El último trozo lleva **solo lo que queda**, sin relleno: rellenar con ceros escribiría
+     * bytes que nadie pidió escribir, en direcciones que pueden ser de otro parámetro.
+     *
+     * @param chunkSize bytes de datos por mensaje. Ver [MAX_SET_PAYLOAD] para el porqué del
+     *   valor por defecto.
+     * @return los mensajes en el orden en que hay que mandarlos. Un [data] vacío no da ningún
+     *   mensaje: no hay nada que escribir, y un SET sin datos no significa nada.
+     */
+    fun setChunked(
+        address: Address,
+        data: ByteArray,
+        chunkSize: Int = MAX_SET_PAYLOAD,
+    ): List<ByteArray> {
+        require(chunkSize > 0) { "el tamaño de trozo debe ser positivo, era $chunkSize" }
+        if (data.isEmpty()) return emptyList()
+        return data.indices.step(chunkSize).map { offset ->
+            val end = minOf(offset + chunkSize, data.size)
+            set(address + offset, data.copyOfRange(offset, end))
+        }
     }
 
     /**
@@ -116,6 +172,22 @@ object RolandSysEx {
             address = Address.fromBytes(body.copyOfRange(0, Address.SIZE)),
             data = body.copyOfRange(Address.SIZE, body.size),
         )
+    }
+
+    /**
+     * El byte de comando de un mensaje ya formado: [COMMAND_GET] o [COMMAND_SET].
+     *
+     * [parse] **no lo devuelve** —un GET y un SET dan los dos un [RolandMessage.Data], donde el
+     * "dato" de un GET es en realidad su tamaño de 4 bytes— y hasta ahora nadie lo necesitaba,
+     * porque el amplificador solo manda SET. Lo necesita quien tiene que *contestar* a un GET:
+     * el link offline (CLAUDE.md §4.5).
+     *
+     * @return el comando, o null si el mensaje es demasiado corto o no es uno de los dos.
+     */
+    fun commandOf(message: ByteArray): Int? {
+        if (message.size <= HEADER.size) return null
+        val command = message[HEADER.size].toInt() and 0xFF
+        return command.takeIf { it == COMMAND_GET || it == COMMAND_SET }
     }
 
     private fun build(command: Int, address: Address, payload: ByteArray): ByteArray {

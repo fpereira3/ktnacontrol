@@ -3,9 +3,47 @@
 
     <!-- Pantalla de diagnóstico de conexión USB -->
     <string name="debug_connection_section_logs">Logs</string>
-    <string name="debug_connection_section_sliders">Sliders</string>
+    <string name="debug_connection_section_amp">Amplificador</string>
+    <string name="debug_connection_section_effects">Efectos</string>
+    <string name="debug_connection_section_presets">Presets</string>
+
+    <!--
+        Shell de navegación (Fase 2, CLAUDE.md §4.2): el estado de conexión deja de vivir solo en
+        Logs y pasa a estar en la barra superior de las cuatro pantallas.
+    -->
+    <string name="shell_connection_connected">Conectado: %1$s</string>
+    <string name="shell_connection_connecting">Conectando…</string>
+    <string name="shell_connection_absent">Sin amplificador</string>
+    <string name="shell_connection_failed">Conexión fallida</string>
+    <string name="shell_advanced">Avanzado</string>
+
+    <!--
+        El estado de "sin amplificador" que sustituye a los controles en gris. Una frase por
+        estado: no es lo mismo "todavía no se ha buscado" que "se buscó y no estaba".
+    -->
+    <string name="no_amp_title">Sin amplificador conectado</string>
+    <string name="no_amp_body_idle">Conecta el Katana por USB (OTG). Esta pantalla controla el amplificador en vivo, así que sin cable no hay nada que mover.</string>
+    <string name="no_amp_body_searching">Buscando el amplificador…</string>
+    <string name="no_amp_body_not_found">Se listaron los dispositivos USB y ninguno es el Katana. Comprueba el cable OTG y que el amplificador esté encendido.</string>
+    <string name="no_amp_body_permission">Falta el permiso de USB: acepta el diálogo del sistema para que la app pueda abrir el dispositivo.</string>
+    <string name="no_amp_body_failed">No se pudo abrir la conexión: %1$s</string>
+    <string name="no_amp_library_hint">La Biblioteca sí funciona sin cable: importar, ver y editar presets de fichero.</string>
+    <string name="no_amp_scan">Buscar amplificador</string>
+
+    <!-- Volver desde el editor offline con cambios sin guardar: el único camino que los pierde. -->
+    <string name="library_discard_title">¿Descartar los cambios?</string>
+    <string name="library_discard_body">«%1$s» tiene cambios sin guardar. Si vuelves ahora se pierden; cambiar de pestaña, en cambio, los conserva.</string>
+    <string name="library_discard_confirm">Descartar</string>
+
+    <!--
+        PresetsScreen junta dos cosas que actúan sobre sitios distintos: el amplificador
+        conectado y los ficheros del teléfono. Los subtítulos existen para que no se confundan.
+    -->
+    <string name="presets_live_title">Amplificador (en vivo)</string>
+    <string name="presets_live_subtitle">Actúa sobre el sonido que el amplificador tiene ahora mismo. Requiere el cable conectado.</string>
+    <string name="presets_library_title">Biblioteca</string>
+    <string name="presets_library_subtitle">Ficheros .tsl guardados en este teléfono. Funciona con el amplificador desconectado.</string>
     <!-- Glifo del menú hamburguesa: evita depender de material-icons solo por un icono. -->
-    <string name="debug_connection_menu">\u2630</string>
     <string name="debug_connection_scan">Buscar</string>
     <string name="debug_connection_handshake">Handshake</string>
     <string name="debug_connection_handshake_real_version">Handshake v-real</string>
@@ -57,13 +95,21 @@
     <string name="booster_effect_level">Effect Level: %1$s</string>
     <string name="booster_direct_mix_level">Direct Mix: %1$s</string>
     <!-- Controles restantes del bloque PREAMP (60 00 00 21-2C), ver BACKLOG.md -->
-    <string name="amp_bright">Bright</string>
-    <string name="amp_gain_sw">Gain SW</string>
-    <string name="amp_gain_sw_low">Low</string>
-    <string name="amp_gain_sw_middle">Middle</string>
-    <string name="amp_gain_sw_high">High</string>
     <string name="amp_solo">Solo</string>
     <string name="amp_solo_level">Solo Level: %1$s</string>
+
+    <!-- Bloque de diagnóstico: dos direcciones candidatas para el Solo del amplificador, y
+         la prueba SET+GET de Bright / Gain SW. Temporal, ver CLAUDE.md §5. -->
+    <string name="diag_section">Diagnóstico (temporal)</string>
+    <string name="diag_solo_caption">Solo del amplificador: la candidata 1 (PREAMP, 60 00 00 2B/2C) se probó y no hizo nada. Esta es la candidata 2 (panel, 60 00 06 14/15).</string>
+    <string name="diag_solo_panel">Solo Sw · candidata 2 (06 14)</string>
+    <string name="diag_solo_panel_level">Solo Level · candidata 2 (06 15): %1$s</string>
+    <string name="diag_read_solo_panel">GET candidata 2</string>
+    <string name="diag_probe_caption">Prueba SET+GET: escribe y vuelve a leer la misma dirección. Separa «la dirección es correcta pero no suena» de «la dirección no acepta la escritura». El resultado sale en Logs.</string>
+    <string name="diag_probe_solo1_on">Solo cand.1 ON</string>
+    <string name="diag_probe_solo1_off">Solo cand.1 OFF</string>
+    <string name="diag_probe_solo2_on">Solo cand.2 ON</string>
+    <string name="diag_probe_solo2_off">Solo cand.2 OFF</string>
     <!-- Parámetros internos fijos de Delay 1 y Reverb, CLAUDE.md §5.2 -->
     <string name="delay_time">Time: %1$s</string>
     <string name="delay_feedback">Feedback: %1$s</string>
@@ -79,7 +125,106 @@
     <string name="reverb_time">Time: %1$s s</string>
     <string name="mod_chorus_pre_delay_low">2x2 Chorus Pre Delay (Low): %1$s ms</string>
     <string name="mod_chorus_pre_delay_high">2x2 Chorus Pre Delay (High): %1$s ms</string>
-    <string name="mod_internal_params_requires_chorus">Solo disponible con el tipo 2x2 Chorus</string>
+    <!-- Biblioteca de presets: importar y ver .tsl sin amplificador, CLAUDE.md §5 -->
+    <string name="library_import">Importar .tsl…</string>
+    <string name="library_importing">Importando…</string>
+    <string name="library_empty">No hay presets importados todavía. Pulsa «Importar .tsl…» y elige un archivo exportado desde Boss Tone Studio.</string>
+    <string name="library_offline_note">La biblioteca lee archivos: funciona sin el amplificador conectado. Solo lectura — todavía no se puede editar ni enviar al amplificador.</string>
+    <string name="library_entry_unreadable">No se pudo leer: %1$s</string>
+    <string name="library_delete">Borrar</string>
+    <string name="library_back">← Volver a la biblioteca</string>
+    <string name="library_detail_readonly">Solo lectura: estos valores vienen del archivo, no del amplificador.</string>
+    <string name="library_detail_file">Archivo: %1$s</string>
+    <string name="library_detail_memo">Nota: %1$s</string>
+    <string name="library_detail_unavailable_title">No disponible en este archivo (%1$d)</string>
+    <string name="library_detail_unavailable_item">%1$s — %2$s</string>
+    <!-- Contadores con plural de verdad: "1 preset" / "2 presets". -->
+    <plurals name="library_entry_presets">
+        <item quantity="one">%1$d preset</item>
+        <item quantity="other">%1$d presets</item>
+    </plurals>
+    <plurals name="library_detail_loaded">
+        <item quantity="one">%1$d byte cargado</item>
+        <item quantity="other">%1$d bytes cargados</item>
+    </plurals>
+
+    <!-- Guardado de presets, CLAUDE.md §5. Operación destructiva: la copy lo dice en cada paso. -->
+    <string name="preset_save_button">Guardar preset…</string>
+    <string name="preset_save_title">Guardar preset en el amplificador</string>
+    <string name="preset_save_name_label">Nombre del preset</string>
+    <string name="preset_save_name_counter">%1$d/%2$d</string>
+    <string name="preset_save_name_sanitized">Se guardará como «%1$s» — el amplificador solo acepta ASCII.</string>
+    <string name="preset_save_target_label">Canal destino</string>
+    <string name="preset_save_same_channel">Es el canal que estás editando (%1$s).</string>
+    <string name="preset_save_other_channel">⚠️ Esto sobrescribirá el canal %1$s, que no es el que estás editando (%2$s).</string>
+    <string name="preset_save_unknown_channel">⚠️ El amplificador todavía no ha dicho en qué canal está.</string>
+    <string name="preset_save_warning">Sobrescribe el canal en el amplificador y no hay deshacer. El amplificador no confirma el guardado: la app solo puede releer el nombre después.</string>
+    <string name="preset_save_continue">Continuar</string>
+    <string name="preset_save_confirm_title">¿Sobrescribir el canal %1$s?</string>
+    <string name="preset_save_confirm_body">Se va a guardar «%1$s» en el canal %2$s del amplificador.\n\nLo que haya ahora en %2$s se pierde y no se puede recuperar.</string>
+    <string name="preset_save_confirm_action">Sí, sobrescribir %1$s</string>
+    <string name="preset_save_in_flight">Guardando…</string>
+    <string name="preset_save_needs_edit_mode">Requiere Edit Mode encendido.</string>
+    <!--
+        Enviar un preset de la Biblioteca al amplificador (BACKLOG bloque 5). Igual de
+        destructivo que guardar en un canal, así que la copy sigue la misma regla: decir en cada
+        paso qué se pierde, y no afirmar éxito al final, porque un SET no se confirma.
+    -->
+    <string name="library_send_button">Enviar al amplificador…</string>
+    <string name="library_send_in_flight">Enviando…</string>
+    <string name="library_send_needs_edit_mode">Requiere el amplificador conectado y Edit Mode encendido.</string>
+    <string name="library_send_review_title">Enviar «%1$s» al amplificador</string>
+    <string name="library_send_review_body">Se va a escribir — bloques: %1$d · mensajes: %2$d · bytes: %3$d.\n\nSobrescribe el sonido que el amplificador tenga en edición, y no hay deshacer.</string>
+    <string name="library_send_review_skipped_title">⚠️ Bloques que NO se escriben: %1$d. Esas direcciones se quedan con lo que ya haya en el amplificador:</string>
+    <string name="library_send_review_skipped_item">· %1$s — %2$s</string>
+    <string name="library_send_review_empty">No hay ningún bloque completo que mandar: no se enviaría nada.</string>
+    <string name="library_send_confirm_title">¿Escribir «%1$s» en el amplificador?</string>
+    <string name="library_send_confirm_body">Mensajes a mandar: %1$d.\n\nLo que el amplificador tenga en edición sin guardar se pierde y no se puede recuperar.</string>
+    <string name="library_send_confirm_action">Sí, enviar</string>
+    <string name="library_send_result_title">Resultado del envío</string>
+    <string name="library_send_result_ok">Mensajes que salieron: %1$d · bytes: %2$d.\n\n⚠️ El amplificador no confirma un SET, así que esto no prueba que los aceptara: compruébalo en el propio amplificador. Y no queda guardado en ningún canal — para eso hay que guardar el preset.</string>
+    <string name="library_send_result_cut">El envío se cortó — mensajes enviados: %1$d de %2$d.\n\n⚠️ No se guardó nada. El amplificador ha quedado con una mezcla del preset anterior y de este. Vuelve a enviarlo, o cambia de canal en el amplificador para que recargue su preset guardado.</string>
+    <string name="library_send_result_cut_where">Se paró en: %1$s.</string>
+    <string name="library_send_result_failed">El envío se cortó por un error: %1$s.\n\n⚠️ No se sabe cuántos mensajes llegaron, así que el amplificador puede haber quedado con el preset a medias. Nada de esto se ha guardado en ningún canal.</string>
+    <string name="library_send_result_failed_unknown">sin detalle</string>
+    <string name="library_send_result_no_transport">No hay amplificador conectado: no se mandó nada y el amplificador está intacto.</string>
+    <string name="library_send_result_cancelled">Cancelado: no se mandó nada al amplificador.</string>
+    <string name="library_send_result_skipped">Bloques no escritos: %1$d — se quedan como estaban: %2$s.</string>
+    <string name="dialog_ok">Entendido</string>
+    <string name="dialog_cancel">Cancelar</string>
+    <string name="dialog_back">Atrás</string>
+
+    <!-- Controles sin perilla física, CLAUDE.md §5 -->
+    <string name="section_no_panel">Sin perilla física</string>
+    <string name="no_panel_notice">Controles que existen en Boss Tone Studio pero no tienen perilla en el panel. ⚠️ Ninguno confirmado con audio todavía.</string>
+    <string name="noise_gate">Noise Gate</string>
+    <string name="noise_gate_threshold">Threshold: %1$s</string>
+    <string name="noise_gate_release">Release: %1$s</string>
+    <string name="contour">Contour</string>
+    <string name="contour_select">Contour activo</string>
+    <string name="contour_freq_shift">Freq Shift (activo): %1$s</string>
+    <string name="contour_slot">Contour %1$d</string>
+    <string name="contour_slot_shape">Shape</string>
+    <string name="contour_slot_freq_shift">Freq Shift: %1$s</string>
+    <string name="contour_slots_outside_dump">⚠️ Estos tres slots caen fuera del dump: se leen con el GET individual de respaldo.</string>
+    <string name="eq_position">Posición en la cadena</string>
+    <string name="eq1_position_in">Amp In</string>
+    <string name="eq1_position_out">Amp Out</string>
+    <string name="eq2_position_in">PreAmp In</string>
+    <string name="eq2_position_out">Pre Amp Out</string>
+    <string name="eq1_title">Ecualizador 1</string>
+    <string name="eq2_title">Ecualizador 2</string>
+    <string name="eq_parametric_header">Paramétrico</string>
+    <string name="eq_graphic_header">Gráfico (pasos de 0,5 dB)</string>
+    <string name="eq_inactive_half">Con Selection en «%1$s», la otra mitad de los parámetros no suena.</string>
+    <string name="chain_title">Cadena de efectos</string>
+    <string name="chain_type">Cadena predefinida (1–7)</string>
+    <string name="chain_loop_position">Loop</string>
+    <string name="chain_loop_post_amp">Post Amp</string>
+    <string name="chain_loop_post_reverb">Post Reverb</string>
+    <string name="chain_pedal_fx_position">Pedal/FX</string>
+    <string name="chain_pedal_fx_input">Input</string>
+    <string name="chain_pedal_fx_post_amp">Post Amp</string>
     <string name="color_green">Verde</string>
     <string name="color_red">Rojo</string>
     <string name="color_yellow">Amarillo</string>
@@ -91,4 +236,17 @@
     <string name="debug_connection_state_permission">Esperando permiso USB…</string>
     <string name="debug_connection_state_connected">Conectado a %1$s</string>
     <string name="debug_connection_state_failed">Error: %1$s</string>
+    <string name="library_new_preset">Nuevo preset</string>
+    <string name="library_create">Crear</string>
+    <string name="library_edit">Editar</string>
+    <string name="library_save">Guardar</string>
+    <string name="library_save_as">Guardar como…</string>
+    <string name="library_unsaved">Cambios sin guardar</string>
+    <string name="library_name_preview">Se guardará como: %1$s</string>
+    <string name="library_overwrite_warning">Esto sobrescribirá «%1$s» en la biblioteca.</string>
+    <string name="library_export">Exportar a .tsl…</string>
+    <string name="chain_diagram_title">Orden real de la cadena (solo lectura)</string>
+    <string name="chain_diagram_empty">Sin leer todavía</string>
+    <string name="refresh_state">Releer estado</string>
+    <string name="refresh_in_flight">Releyendo…</string>
 </resources>

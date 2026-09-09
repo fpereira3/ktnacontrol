@@ -63,6 +63,32 @@ enum class SelectorId(val logName: String) {
 
     /** ⚠️ High Cut of Reverb's internal block (`60 00 05 46`). Unconfirmed. */
     REVERB_HIGH_CUT("reverb high cut"),
+
+    // --- Controles sin perilla física (CLAUDE.md §5), 2026-09-06. Ninguno confirmado -------
+
+    /** ⚠️ Noise Gate on/off (`60 00 05 66`). Unconfirmed. */
+    NOISE_GATE("noise gate"),
+
+    /** ⚠️ Contour on/off (`60 00 06 16`). Unconfirmed. */
+    CONTOUR("contour"),
+
+    /** ⚠️ Cuál de los tres slots de Contour está activo (`60 00 06 17`). Unconfirmed. */
+    CONTOUR_SELECT("contour select"),
+
+    /** ⚠️ Posición de EQ1 en la cadena (`60 00 06 22`): **dos** valores, no tres. Unconfirmed. */
+    EQ1_POSITION("eq1 position"),
+
+    /** ⚠️ Posición de EQ2 (`60 00 06 19`): dos valores. Unconfirmed. */
+    EQ2_POSITION("eq2 position"),
+
+    /** ⚠️ Cuál de las siete cadenas predefinidas está activa (`60 00 06 20`). Unconfirmed. */
+    CHAIN_TYPE("chain type"),
+
+    /** ⚠️ Posición del loop de send/return (`60 00 06 21`). Unconfirmed. */
+    LOOP_POSITION("loop position"),
+
+    /** ⚠️ Posición del Pedal/FX (`60 00 06 23`). Unconfirmed. */
+    PEDAL_FX_POSITION("pedal fx position"),
 }
 
 /**
@@ -133,4 +159,31 @@ enum class ReverbParamId(
     PRE_DELAY(R.string.reverb_pre_delay, 0..500, "pre delay"),
     DENSITY(R.string.reverb_density, 0..10, "density"),
     DIRECT_MIX(R.string.reverb_direct_mix, 0..100, "direct mix"),
+}
+
+/**
+ * Los tres niveles continuos de los controles **sin perilla física** (CLAUDE.md §5): los dos
+ * del Noise Gate y el Freq Shift del Contour activo.
+ *
+ * Van juntos en un enum, y no dispersos por las tarjetas de efecto, porque no pertenecen a
+ * ningún efecto: son del amplificador, y en el panel no tienen dónde vivir. Sus on/off y
+ * selectores son [SelectorId]; sus slots de Contour tienen su propio camino ([contourSlots] en
+ * el repositorio), porque son tres pares repetidos y no tres parámetros distintos.
+ *
+ * ⚠️ **Implementados el 2026-09-06, sin confirmar con audio.** Fuente única `midi.xml`.
+ */
+enum class NoPanelParamId(
+    @param:StringRes val labelRes: Int,
+    /** El rango que muestra el slider, igual que el `displayRange` de su `LevelScale`. */
+    val displayRange: IntRange,
+    val logName: String,
+) {
+    NOISE_GATE_THRESHOLD(R.string.noise_gate_threshold, 0..100, "noise gate threshold"),
+    NOISE_GATE_RELEASE(R.string.noise_gate_release, 0..100, "noise gate release"),
+
+    /**
+     * ⚠️ El Freq Shift del Contour **activo** (`60 00 06 1A`), centrado en cero — no confundir
+     * con el de cada slot, que vive fuera del dump y va por [contourSlots].
+     */
+    CONTOUR_FREQ_SHIFT(R.string.contour_freq_shift, -50..50, "contour freq shift"),
 }

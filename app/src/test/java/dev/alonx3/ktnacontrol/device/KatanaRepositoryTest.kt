@@ -1396,7 +1396,13 @@ class KatanaRepositoryTest {
         delay(20) // la recarga de conexión todavía no ha recibido su respuesta
         link.reportChannel(3)
 
-        delay(800)
+        // ⚠️ Este margen creció de 800 ms a 4 s el 2026-09-06, y no por hacer sitio "por si
+        // acaso": los tres slots de Contour (`60 00 0F 30`/`38`/`40`) caen **fuera** del dump,
+        // así que cada recarga añade 6 GET de respaldo, y `loadFromDump` los hace **en serie**.
+        // Con `replyDelayMs = 200` son 1,2 s extra por recarga, y aquí hay dos recargas.
+        // El invariante que prueba este test —nunca dos dumps a la vez— no cambió; lo que
+        // cambió es cuánto tarda una recarga completa. Ver BACKLOG.md, "Pendiente por probar".
+        delay(4_000)
 
         assertEquals("nunca deben coincidir dos dumps en vuelo", 1, maxInFlight.get())
         assertEquals(3, repo.channel.state.value)

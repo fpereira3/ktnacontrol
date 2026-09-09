@@ -5,17 +5,27 @@ import android.hardware.usb.UsbDevice
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.alonx3.ktnacontrol.device.KatanaLink
+import dev.alonx3.ktnacontrol.device.KatanaControl
 import dev.alonx3.ktnacontrol.device.KatanaEnumParameter
 import dev.alonx3.ktnacontrol.device.KatanaParameter
 import dev.alonx3.ktnacontrol.device.KatanaRepository
 import dev.alonx3.ktnacontrol.protocol.Address
+import dev.alonx3.ktnacontrol.protocol.MemoryImage
 import dev.alonx3.ktnacontrol.protocol.AmpCategory
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.BoostType
 import dev.alonx3.ktnacontrol.protocol.DelayType
+import dev.alonx3.ktnacontrol.protocol.ChainBlock
 import dev.alonx3.ktnacontrol.protocol.EffectColor
+import dev.alonx3.ktnacontrol.protocol.EqParams
 import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
+import dev.alonx3.ktnacontrol.protocol.ModFxInternalParams
+import dev.alonx3.ktnacontrol.protocol.ParamKind
+import dev.alonx3.ktnacontrol.protocol.ParamSpec
 import dev.alonx3.ktnacontrol.protocol.ModFxType
+import dev.alonx3.ktnacontrol.protocol.PresetSave
+import dev.alonx3.ktnacontrol.protocol.displayToRaw
+import dev.alonx3.ktnacontrol.protocol.rawToDisplay
 import dev.alonx3.ktnacontrol.protocol.ReverbType
 import dev.alonx3.ktnacontrol.protocol.RolandMessage
 import dev.alonx3.ktnacontrol.protocol.RolandSysEx
@@ -51,6 +61,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import dev.alonx3.ktnacontrol.library.PresetLibrary
+import dev.alonx3.ktnacontrol.library.SaveResult
 
 /**
  * Drives the diagnostics screen, which works as a **live monitor**: once the transport is
@@ -192,6 +204,121 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     /** ⚠️ Same as [modChorusPreDelayLow], the High band (`60 00 02 3E`). */
     val modChorusPreDelayHigh: StateFlow<Double?> = _modChorusPreDelayHigh.asStateFlow()
 
+    private val _modFxInternalRaw =
+        MutableStateFlow<Map<ModFxType, Map<String, Int?>>>(emptyMap())
+
+    /**
+     * Valores crudos de los parámetros internos de los 31 tipos de Mod (CLAUDE.md §5.2,
+     * `ModFxInternalParams`). Clave externa: el tipo; interna, la etiqueta del parámetro
+     * dentro de ese tipo. **Crudo, no mostrado** — a diferencia de [reverbParams] y compañía,
+     * aquí la conversión vive en `ParamKind.rawToDisplay`/`displayToRaw` (protocol/,
+     * puro): son 192 parámetros con 6 formas de escala distintas, y una tabla los convierte
+     * todos igual de bien que 192 propiedades con nombre, sin repetir la conversión 192 veces.
+     *
+     * Solo tienen sentido los del tipo activo en el slot ([EffectId.MOD]'s `type`, en
+     * [selectors]); el resto son bytes de otro tipo que comparte la misma dirección
+     * (CLAUDE.md §5.2, "DSP complejo").
+     *
+     * ⚠️ Nada de esto está confirmado con el amplificador.
+     */
+    val modFxInternalRaw: StateFlow<Map<ModFxType, Map<String, Int?>>> =
+        _modFxInternalRaw.asStateFlow()
+
+    private val _fxInternalRaw =
+        MutableStateFlow<Map<ModFxType, Map<String, Int?>>>(emptyMap())
+
+    /** Igual que [modFxInternalRaw] pero para **FX** — mismas direcciones `+ FX_OFFSET`. */
+    val fxInternalRaw: StateFlow<Map<ModFxType, Map<String, Int?>>> =
+        _fxInternalRaw.asStateFlow()
+
+    // --- Controles sin perilla física (CLAUDE.md §5) ---------------------------------------
+    //
+    // ⚠️ Todo lo de aquí está implementado y sin confirmar con audio. Los on/off y selectores
+    // van por el camino de [selectors], que ya existía; esto es lo que necesita estado propio.
+
+    private val _noPanelParams =
+        MutableStateFlow(NoPanelParamId.entries.associateWith { null as Int? })
+
+    /** ⚠️ Los tres niveles continuos sin perilla, en unidades de presentación. Sin confirmar. */
+    val noPanelParams: StateFlow<Map<NoPanelParamId, Int?>> = _noPanelParams.asStateFlow()
+
+    /** Los dos valores de un slot de Contour, en unidades de presentación. */
+    data class ContourSlotValues(val shape: Int? = null, val freqShift: Int? = null)
+
+    private val _contourSlots =
+        MutableStateFlow(List(KatanaAddresses.CONTOUR_SLOT_COUNT) { ContourSlotValues() })
+
+    /**
+     * ⚠️ Los tres slots de Contour (`60 00 0F 30`/`38`/`40`). Sin confirmar.
+     *
+     * ⚠️ **Caen fuera del dump**, así que al conectar llegan por el GET individual de respaldo
+     * y no de golpe con el resto — pueden tardar un poco más en poblarse que todo lo demás.
+     */
+    val contourSlots: StateFlow<List<ContourSlotValues>> = _contourSlots.asStateFlow()
+
+    private val _eq1Raw = MutableStateFlow<Map<String, Int?>>(emptyMap())
+    private val _eq2Raw = MutableStateFlow<Map<String, Int?>>(emptyMap())
+
+    /**
+     * ⚠️ Los 24 parámetros de EQ1, **en crudo**, por etiqueta de [EqParams.SPECS]. Sin
+     * confirmar. Misma forma que [modFxInternalRaw] y por la misma razón: la conversión a lo
+     * que se muestra vive en `ParamKind.rawToDisplay`, que es puro y está en `protocol/`.
+     */
+    val eq1Raw: StateFlow<Map<String, Int?>> = _eq1Raw.asStateFlow()
+
+    /** ⚠️ Igual que [eq1Raw] para EQ2 — mismas direcciones `+ 0x20`. Sin confirmar. */
+    val eq2Raw: StateFlow<Map<String, Int?>> = _eq2Raw.asStateFlow()
+
+    // --- Mandar un preset de la Biblioteca al amplificador (CLAUDE.md §5, bloque 5) --------
+
+    /**
+     * ⚠️ **La secuencia de mandar un preset entero al amplificador. Destructiva.**
+     *
+     * Toda la lógica vive en [PresetSendFlow], que no sabe de Compose ni de Android y tiene sus
+     * propios tests JVM; aquí solo se le da **con qué mandar**. La regla de siempre: el
+     * ViewModel no decide si se puede editar —eso es de la UI, §4.2— y esta capa tampoco mira
+     * el edit mode.
+     *
+     * El envío devuelve **null cuando no hay transporte**, que el flujo distingue de un fallo:
+     * sin cable no salió nada y el amplificador está intacto, mientras que un fallo a mitad lo
+     * deja con el preset a medias.
+     */
+    val presetSend = PresetSendFlow(
+        scope = viewModelScope,
+        send = { image -> sendImageToAmp(image) },
+    )
+
+    private suspend fun sendImageToAmp(image: MemoryImage): KatanaRepository.PresetSendResult? {
+        val active = repository ?: run {
+            appendLog(NO_TRANSPORT)
+            return null
+        }
+        appendLog("→ ENVIAR preset al amplificador (${image.size} B) — destructivo:")
+        val result = active.sendPreset(image)
+        appendLog("  ${result.verdict}")
+        return result
+    }
+
+    private val _presetSaveInFlight = MutableStateFlow(false)
+
+    /**
+     * ⚠️ Hay un guardado en curso. La UI deshabilita el botón mientras dure.
+     *
+     * No es cosmético: guardar es destructivo, no se confirma, y **ninguna fuente dice cuánto
+     * hay que esperar entre dos guardados** (CLAUDE.md §5 → TBD). Dejar pulsar dos veces
+     * seguidas sería justo el escenario del que nadie sabe qué pasa.
+     */
+    val presetSaveInFlight: StateFlow<Boolean> = _presetSaveInFlight.asStateFlow()
+
+    private val _chainSlots = MutableStateFlow(List<Int?>(ChainBlock.SLOT_COUNT) { null })
+
+    /**
+     * ⚠️ Las 20 posiciones de la cadena, en orden (`60 00 06 00`–`06 13`). Sin confirmar.
+     *
+     * Cada valor es un [ChainBlock]; el conjunto debería ser una permutación de los veinte.
+     */
+    val chainSlots: StateFlow<List<Int?>> = _chainSlots.asStateFlow()
+
     private val _ampSoloLevel = MutableStateFlow<Int?>(null)
 
     /**
@@ -200,6 +327,20 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
      * amplificador no recarga nada").
      */
     val ampSoloLevel: StateFlow<Int?> = _ampSoloLevel.asStateFlow()
+
+    private val _ampSoloEnabledPanel = MutableStateFlow<Int?>(null)
+    private val _ampSoloLevelPanel = MutableStateFlow<Int?>(null)
+
+    /**
+     * ⚠️ Diagnóstico: Solo Sw del amplificador por la **segunda candidata**, `60 00 06 14`.
+     *
+     * Convive con [SelectorId.AMP_SOLO] (`60 00 00 2B`), que ya se probó y no hizo nada. Ver
+     * [KatanaAddresses.AMP_SOLO_ENABLED_PANEL].
+     */
+    val ampSoloEnabledPanel: StateFlow<Int?> = _ampSoloEnabledPanel.asStateFlow()
+
+    /** ⚠️ Diagnóstico: Solo Level por la segunda candidata, `60 00 06 15`, en `0..100`. */
+    val ampSoloLevelPanel: StateFlow<Int?> = _ampSoloLevelPanel.asStateFlow()
 
     private val _editMode = MutableStateFlow(false)
 
@@ -252,6 +393,40 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         data class ChannelChanged(val channel: Int) : ReloadRequest {
             override val reason: String = "el cambio de canal"
         }
+
+        /**
+         * El usuario pidió releer, con el botón de refresco.
+         *
+         * ⚠️ **[nonce] no es decoración: sin él el botón funcionaría una sola vez.**
+         * [reloadRequests] es un `MutableStateFlow`, que **descarta un valor igual al que ya
+         * tiene**; dos refrescos seguidos son la misma petición y el segundo no dispararía
+         * nada. Un contador que sube en cada pulsación los hace distintos.
+         */
+        data class Manual(val nonce: Long) : ReloadRequest {
+            override val reason: String = "el refresco manual"
+        }
+    }
+
+    /** Lo que hace distinta a cada pulsación del botón de refresco. Ver [ReloadRequest.Manual]. */
+    private var manualReloadNonce = 0L
+
+    private val _reloadInFlight = MutableStateFlow(false)
+
+    /** Hay una recarga en curso: leer el dump entero tarda, y no conviene pedir dos a la vez. */
+    val reloadInFlight: StateFlow<Boolean> = _reloadInFlight.asStateFlow()
+
+    /**
+     * Vuelve a leer el dump completo del canal actual y repuebla todo el estado.
+     *
+     * ✅ **Reutiliza el coordinador de recargas tal cual**, en vez de llamar a `loadFromDump`
+     * por su cuenta: pasa por el mismo `MutableStateFlow` conflado y el mismo `Mutex` que la
+     * recarga de conexión y la de cambio de canal. Eso es lo que impide que un refresco a mano
+     * se solape con una recarga automática — exactamente el bug de los dumps simultáneos que
+     * costó un día de depuración (CLAUDE.md §4.4).
+     */
+    fun onRefreshClicked() {
+        val requests = reloadRequests ?: return appendLog(NO_TRANSPORT)
+        requests.value = ReloadRequest.Manual(++manualReloadNonce)
     }
 
     /**
@@ -750,6 +925,19 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                     _ampSoloLevel.value = raw?.let(KatanaAddresses.PANEL_LEVEL_SCALE::toDisplay)
                 }
             }
+            // ⚠️ Diagnóstico: la segunda candidata del Solo. Se refleja igual que el resto
+            // para que un reporte espontáneo del amplificador se vea en la UI — que es
+            // justo lo que delata una dirección de solo lectura (§5, `60 00 06 5C`).
+            launch {
+                newRepository.ampSoloEnabledPanel.state.collect { raw ->
+                    _ampSoloEnabledPanel.value = raw
+                }
+            }
+            launch {
+                newRepository.ampSoloLevelPanel.state.collect { raw ->
+                    _ampSoloLevelPanel.value = raw?.let(KatanaAddresses.PANEL_LEVEL_SCALE::toDisplay)
+                }
+            }
             DelayParamId.entries.forEach { id ->
                 launch {
                     val parameter = delayParamIn(newRepository, id)
@@ -783,6 +971,84 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                 newRepository.modChorusPreDelayHigh.state.collect { raw ->
                     _modChorusPreDelayHigh.value =
                         raw?.let(newRepository.modChorusPreDelayHigh.scale::toDisplay)
+                }
+            }
+            // Los 192 parámetros internos de los 31 tipos de Mod/FX (CLAUDE.md §5.2): un
+            // colector por control, igual que arriba, pero generado desde la tabla en vez de
+            // nombrado uno a uno — con 31 tipos, repetir el patrón de `DelayParamId.entries`
+            // 192 veces sería más código sin ayudar a nadie a encontrar nada.
+            newRepository.modInternalParams.forEach { (type, params) ->
+                params.forEach { (label, control) ->
+                    launch {
+                        control.state.collect { raw ->
+                            _modFxInternalRaw.update { current ->
+                                current + (type to ((current[type] ?: emptyMap()) + (label to raw)))
+                            }
+                        }
+                    }
+                }
+            }
+            newRepository.fxInternalParams.forEach { (type, params) ->
+                params.forEach { (label, control) ->
+                    launch {
+                        control.state.collect { raw ->
+                            _fxInternalRaw.update { current ->
+                                current + (type to ((current[type] ?: emptyMap()) + (label to raw)))
+                            }
+                        }
+                    }
+                }
+            }
+            // Controles sin perilla física (CLAUDE.md §5).
+            NoPanelParamId.entries.forEach { id ->
+                launch {
+                    val parameter = noPanelParamIn(newRepository, id)
+                    parameter.state.collect { raw ->
+                        val shown = raw?.let(parameter.scale::toDisplay)
+                        _noPanelParams.update { current -> current + (id to shown) }
+                    }
+                }
+            }
+            newRepository.contourSlots.forEachIndexed { index, slot ->
+                launch {
+                    slot.shape.state.collect { raw ->
+                        _contourSlots.update { current ->
+                            current.mapIndexed { i, values ->
+                                if (i == index) values.copy(shape = raw) else values
+                            }
+                        }
+                    }
+                }
+                launch {
+                    slot.freqShift.state.collect { raw ->
+                        val shown = raw?.let(slot.freqShift.scale::toDisplay)
+                        _contourSlots.update { current ->
+                            current.mapIndexed { i, values ->
+                                if (i == index) values.copy(freqShift = shown) else values
+                            }
+                        }
+                    }
+                }
+            }
+            listOf(
+                newRepository.eq1Params to _eq1Raw,
+                newRepository.eq2Params to _eq2Raw,
+            ).forEach { (params, state) ->
+                params.forEach { (label, control) ->
+                    launch {
+                        control.state.collect { raw ->
+                            state.update { current -> current + (label to raw) }
+                        }
+                    }
+                }
+            }
+            newRepository.chainSlots.forEachIndexed { index, control ->
+                launch {
+                    control.state.collect { raw ->
+                        _chainSlots.update { current ->
+                            current.mapIndexed { i, value -> if (i == index) raw else value }
+                        }
+                    }
                 }
             }
             EffectId.entries.forEach { effect ->
@@ -849,16 +1115,26 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                 }
             }
             requests.collectLatest { request ->
-                val channelRequest = request as? ReloadRequest.ChannelChanged
-                if (channelRequest != null) {
-                    if (channelRequest.channel == loadedChannel) return@collectLatest
-                    delay(CHANNEL_RELOAD_SETTLE_MS)
-                    if (channelRequest.channel == loadedChannel) return@collectLatest
-                    appendLog(
-                        "↻ Canal ${describeChannel(channelRequest.channel)}: releyendo todo el estado..."
-                    )
-                } else {
-                    appendLog("→ Poblando el estado desde el dump de memoria...")
+                when (request) {
+                    is ReloadRequest.ChannelChanged -> {
+                        // El guard se reevalúa **después** del margen, no solo antes: durante
+                        // esos 300 ms puede haber llegado ya el valor que esperábamos.
+                        if (request.channel == loadedChannel) return@collectLatest
+                        delay(CHANNEL_RELOAD_SETTLE_MS)
+                        if (request.channel == loadedChannel) return@collectLatest
+                        appendLog(
+                            "↻ Canal ${describeChannel(request.channel)}: releyendo todo el estado..."
+                        )
+                    }
+
+                    // El refresco manual **no** pasa por el guard de canal: el usuario lo pide
+                    // precisamente cuando sospecha que el estado no cuadra, y saltárselo por
+                    // "ya estamos en ese canal" sería no hacer nada justo cuando hace falta.
+                    is ReloadRequest.Manual ->
+                        appendLog("↻ Refresco manual: releyendo todo el estado...")
+
+                    ReloadRequest.Connection ->
+                        appendLog("→ Poblando el estado desde el dump de memoria...")
                 }
                 reloadMutex.withLock { reload(repository, request.reason) }
             }
@@ -867,7 +1143,12 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
 
     /** Lee el dump y deja anotado para qué canal vale lo que se acaba de cargar. */
     private suspend fun reload(repository: KatanaRepository, reason: String) {
-        val load = repository.loadFromDump()
+        _reloadInFlight.value = true
+        val load = try {
+            repository.loadFromDump()
+        } finally {
+            _reloadInFlight.value = false
+        }
         loadedChannel = repository.channel.state.value
         logDumpLoad(load)
         if (load.messages == 0) {
@@ -933,52 +1214,57 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         appendLog("  ${load.state.summary()}")
     }
 
-    private fun selectorIn(repository: KatanaRepository, id: SelectorId): KatanaEnumParameter =
-        when (id) {
-            SelectorId.AMP_CATEGORY -> repository.ampCategory
-            SelectorId.AMP_TYPE -> repository.ampType
-            SelectorId.AMP_VARIATION -> repository.ampVariation
-            SelectorId.ACTIVE_CHANNEL -> repository.channel
-            SelectorId.AMP_BRIGHT -> repository.ampBright
-            SelectorId.AMP_GAIN_SW -> repository.ampGainSw
-            SelectorId.AMP_SOLO -> repository.ampSoloEnabled
-            SelectorId.DELAY_HIGH_CUT -> repository.delayHighCut
-            SelectorId.REVERB_LOW_CUT -> repository.reverbLowCut
-            SelectorId.REVERB_HIGH_CUT -> repository.reverbHighCut
+    private val library = PresetLibrary(application)
+
+    private val _exportInFlight = MutableStateFlow(false)
+
+    /** Hay una exportación en curso: leer el dump entero tarda. */
+    val exportInFlight: StateFlow<Boolean> = _exportInFlight.asStateFlow()
+
+    /**
+     * Exporta el estado actual del amplificador a un `.tsl` de la biblioteca.
+     *
+     * **No es destructivo**: solo lee del amplificador y escribe un fichero nuevo en la carpeta
+     * de la app. Nada que ver con el guardado a un canal, que sí sobrescribe el amp.
+     *
+     * ⚠️ **Lo que el dump no cubra no va en el fichero**, y se dice en el log en vez de
+     * rellenarse con ceros — ver [KatanaRepository.exportImage] y `TslWriter`.
+     */
+    fun onExportPreset(name: String) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        if (_exportInFlight.value) return
+        _exportInFlight.value = true
+        viewModelScope.launch {
+            try {
+                appendLog("→ Exportando el estado actual a «$name»…")
+                val image = active.exportImage()
+                when (val result = library.save(image = image, name = name)) {
+                    is SaveResult.Saved -> {
+                        appendLog("  ← guardado en ${result.entry.fileName} (${image.size} B leídos).")
+                        if (result.omitted.isNotEmpty()) {
+                            appendLog("  · no incluidos: ${result.omitted.joinToString("; ")}")
+                        }
+                    }
+
+                    is SaveResult.Failed -> appendLog("  ! ${result.reason}")
+                }
+            } finally {
+                _exportInFlight.value = false
+            }
         }
+    }
+
+    private fun selectorIn(repository: KatanaRepository, id: SelectorId): KatanaEnumParameter =
+        ControlBinding.selector(repository, id)
 
     private fun colorIn(repository: KatanaRepository, effect: EffectId): KatanaEnumParameter =
-        when (effect) {
-            EffectId.BOOST -> repository.boostColor
-            EffectId.MOD -> repository.modColor
-            EffectId.FX -> repository.fxColor
-            EffectId.DELAY -> repository.delayColor
-            EffectId.REVERB -> repository.reverbColor
-        }
+        ControlBinding.color(repository, effect)
 
     private fun enabledIn(repository: KatanaRepository, effect: EffectId): KatanaEnumParameter =
-        when (effect) {
-            EffectId.BOOST -> repository.boostEnabled
-            EffectId.MOD -> repository.modEnabled
-            EffectId.FX -> repository.fxEnabled
-            EffectId.DELAY -> repository.delayEnabled
-            EffectId.REVERB -> repository.reverbEnabled
-        }
+        ControlBinding.enabled(repository, effect)
 
     private fun parameterIn(repository: KatanaRepository, id: LevelId): KatanaParameter =
-        when (id) {
-            LevelId.GAIN -> repository.gainLevel
-            LevelId.VOLUME -> repository.volumeLevel
-            LevelId.BASS -> repository.bassLevel
-            LevelId.MIDDLE -> repository.middleLevel
-            LevelId.TREBLE -> repository.trebleLevel
-            LevelId.REVERB -> repository.reverbLevel
-            LevelId.PRESENCE -> repository.presenceLevel
-            LevelId.BOOST -> repository.boostLevel
-            LevelId.MOD -> repository.modLevel
-            LevelId.FX -> repository.fxLevel
-            LevelId.DELAY -> repository.delayLevel
-        }
+        ControlBinding.level(repository, id)
 
     /**
      * Reads one level straight from the amp: the GET half of an address test (CLAUDE.md §5).
@@ -1093,13 +1379,7 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     private fun typeControlIn(
         repository: KatanaRepository,
         effect: EffectId,
-    ): KatanaEnumParameter = when (effect) {
-        EffectId.BOOST -> repository.boostTypeActive
-        EffectId.MOD -> repository.modTypeActive
-        EffectId.FX -> repository.fxTypeActive
-        EffectId.DELAY -> repository.delayTypeActive
-        EffectId.REVERB -> repository.reverbTypeActive
-    }
+    ): KatanaEnumParameter = ControlBinding.typeControl(repository, effect)
 
     /**
      * Cambia el tipo de efecto escribiendo en su dirección de **tipo activo**.
@@ -1132,14 +1412,7 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     // cinco parámetros quedan fuera a propósito, ver KatanaAddresses.
 
     private fun boosterParamIn(repository: KatanaRepository, id: BoosterParamId): KatanaParameter =
-        when (id) {
-            BoosterParamId.DRIVE -> repository.boostDrive
-            BoosterParamId.BOTTOM -> repository.boostBottom
-            BoosterParamId.TONE -> repository.boostTone
-            BoosterParamId.SOLO_LEVEL -> repository.boostSoloLevel
-            BoosterParamId.EFFECT_LEVEL -> repository.boostEffectLevel
-            BoosterParamId.DIRECT_MIX -> repository.boostDirectMix
-        }
+        ControlBinding.boosterParam(repository, id)
 
     /** Moves one of Booster's internal parameters, in what the UI shows. Optimistic, debounced. */
     fun onBoosterParamChanged(id: BoosterParamId, value: Int) {
@@ -1188,18 +1461,102 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
+    // --- Diagnóstico: la segunda candidata del Solo del amplificador ----------------------
+    //
+    // Aparte del control ya cableado (`60 00 00 2B`/`2C`), que se probó y no hizo nada. Ver
+    // KatanaAddresses.AMP_SOLO_ENABLED_PANEL.
+
+    /** ⚠️ Diagnóstico: enciende/apaga el Solo por `60 00 06 14`. */
+    fun onAmpSoloPanelEnabledChanged(enabled: Boolean) {
+        val active = repository ?: return
+        val value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF
+        active.ampSoloEnabledPanel.set(value)
+    }
+
+    /** ⚠️ Diagnóstico: mueve el Solo Level por `60 00 06 15`, en lo que muestra la UI. */
+    fun onAmpSoloPanelLevelChanged(value: Int) {
+        val active = repository ?: return
+        active.ampSoloLevelPanel.setLevel(value)
+    }
+
+    /** ⚠️ Diagnóstico: GET a las dos direcciones de la segunda candidata. */
+    fun onReadAmpSoloPanelClicked() {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        viewModelScope.launch {
+            val switch = active.ampSoloEnabledPanel
+            appendLog("→ GET solo sw candidata 2 (${switch.address}):")
+            val raw = switch.read()
+            appendLog(if (raw != null) "  ← el amp responde: $raw" else "  · sin respuesta.")
+
+            val level = active.ampSoloLevelPanel
+            appendLog("→ GET solo level candidata 2 (${level.address}):")
+            val rawLevel = level.read()
+            appendLog(
+                if (rawLevel != null) "  ← el amp responde: ${level.scale.toDisplay(rawLevel)} (crudo $rawLevel)"
+                else "  · sin respuesta."
+            )
+        }
+    }
+
+    // --- Diagnóstico: SET seguido de GET inmediato ----------------------------------------
+
+    /**
+     * Escribe y vuelve a leer, para separar "no suena" de "no acepta la escritura".
+     *
+     * Es el chequeo que resolvió `60 00 05 48` con el nivel de reverb (CLAUDE.md §5): un
+     * control que no produce efecto audible puede ser un parámetro inerte en la dirección
+     * correcta, o una dirección mal identificada, y desde fuera se ven igual. El GET
+     * inmediato después del SET es lo único que los distingue.
+     */
+    private fun probe(label: String, control: KatanaControl?, value: Int) {
+        val target = control ?: return appendLog(NO_TRANSPORT)
+        viewModelScope.launch {
+            appendLog("→ PRUEBA $label (${target.address}) = $value:")
+            val result = target.probeWrite(value)
+            if (result == null) {
+                appendLog("  ! valor no válido para este control.")
+                return@launch
+            }
+            appendLog("  antes=${result.before ?: "sin respuesta"} · pedido=${result.requested} · después=${result.after ?: "sin respuesta"}")
+            appendLog("  ⇒ ${result.verdict}")
+        }
+    }
+
+    /** ⚠️ Diagnóstico: SET + GET de Bright (`60 00 00 29`). */
+    fun onProbeAmpBrightClicked(enabled: Boolean) = probe(
+        label = "bright",
+        control = repository?.ampBright,
+        value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF,
+    )
+
+    /** ⚠️ Diagnóstico: SET + GET de Gain SW (`60 00 00 2A`), `00` Low / `01` Middle / `02` High. */
+    fun onProbeAmpGainSwClicked(value: Int) = probe(
+        label = "gain sw",
+        control = repository?.ampGainSw,
+        value = value,
+    )
+
+    /** ⚠️ Diagnóstico: SET + GET del Solo Sw ya cableado, la candidata del PREAMP. */
+    fun onProbeAmpSoloPreampClicked(enabled: Boolean) = probe(
+        label = "solo sw (candidata 1, PREAMP)",
+        control = repository?.ampSoloEnabled,
+        value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF,
+    )
+
+    /** ⚠️ Diagnóstico: SET + GET del Solo Sw por la segunda candidata, la del bloque panel. */
+    fun onProbeAmpSoloPanelClicked(enabled: Boolean) = probe(
+        label = "solo sw (candidata 2, panel)",
+        control = repository?.ampSoloEnabledPanel,
+        value = if (enabled) KatanaAddresses.SWITCH_ON else KatanaAddresses.SWITCH_OFF,
+    )
+
     // --- Parámetros internos fijos de Delay 1 y Reverb (CLAUDE.md §5.2) --------------------
     //
     // ⚠️ Implementados, pendientes de confirmar con audio. High Cut (Delay y Reverb) y Low Cut
     // (Reverb) no están aquí: son selectores de frecuencia, van por `selectorIn`/`onSelectorChanged`.
 
     private fun delayParamIn(repository: KatanaRepository, id: DelayParamId): KatanaParameter =
-        when (id) {
-            DelayParamId.TIME -> repository.delayTime
-            DelayParamId.FEEDBACK -> repository.delayFeedback
-            DelayParamId.EFFECT_LEVEL -> repository.delayEffectLevel
-            DelayParamId.DIRECT_MIX -> repository.delayDirectMix
-        }
+        ControlBinding.delayParam(repository, id)
 
     /** Moves one of Delay 1's internal parameters, in what the UI shows. Optimistic, debounced. */
     fun onDelayParamChanged(id: DelayParamId, value: Int) {
@@ -1222,11 +1579,7 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     }
 
     private fun reverbParamIn(repository: KatanaRepository, id: ReverbParamId): KatanaParameter =
-        when (id) {
-            ReverbParamId.PRE_DELAY -> repository.reverbPreDelay
-            ReverbParamId.DENSITY -> repository.reverbDensity
-            ReverbParamId.DIRECT_MIX -> repository.reverbDirectMix
-        }
+        ControlBinding.reverbParam(repository, id)
 
     /** Moves one of Reverb's internal parameters, in what the UI shows. Optimistic, debounced. */
     fun onReverbParamChanged(id: ReverbParamId, value: Int) {
@@ -1317,6 +1670,192 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
+    // --- Parámetros internos de los 31 tipos de Mod/FX (CLAUDE.md §5.2) --------------------
+    //
+    // Genérico por (tipo, etiqueta) en vez de una función por parámetro: con 192 parámetros,
+    // una función por cada uno sería ~600 líneas repitiendo la misma forma que
+    // `onDelayParamChanged`/`onReverbParamChanged` de arriba. `ParamKind.displayToRaw`/
+    // `rawToDisplay` (protocol/, puro) hacen la conversión; aquí solo se busca el control y se
+    // llama — misma disciplina de optimista + debounce, heredada de `KatanaControl.set`.
+
+    private fun modFxControlFor(isFx: Boolean, type: ModFxType, label: String): KatanaControl? {
+        val active = repository ?: return null
+        val byType = if (isFx) active.fxInternalParams else active.modInternalParams
+        return byType[type]?.get(label)
+    }
+
+    private fun modFxSpecFor(type: ModFxType, label: String): ParamSpec? =
+        ModFxInternalParams.byType[type]?.firstOrNull { it.label == label }
+
+    /**
+     * Moves one internal parameter of one Mod/FX type, in what the UI shows. Optimistic; the
+     * debounce (or lack of it) is whatever [KatanaControl.set] applies for that control's own
+     * kind — a continuous level coalesces, an [ParamKind.Enum] sends right away.
+     */
+    fun onModFxParamChanged(isFx: Boolean, type: ModFxType, label: String, display: Double) {
+        val control = modFxControlFor(isFx, type, label) ?: return
+        val spec = modFxSpecFor(type, label) ?: return
+        control.set(spec.kind.displayToRaw(display))
+    }
+
+    /** GET half of the audio test for one internal Mod/FX parameter (CLAUDE.md §5). */
+    fun onReadModFxParamClicked(isFx: Boolean, type: ModFxType, label: String) {
+        val control = modFxControlFor(isFx, type, label) ?: return appendLog(NO_TRANSPORT)
+        val spec = modFxSpecFor(type, label) ?: return
+        val effectName = if (isFx) "fx" else "mod"
+        viewModelScope.launch {
+            appendLog("→ GET $effectName ${type.displayName}/$label (${control.address}):")
+            val raw = control.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${spec.kind.rawToDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de $effectName ${type.displayName}/$label."
+            )
+        }
+    }
+
+    // --- Controles sin perilla física (CLAUDE.md §5) ---------------------------------------
+
+    private fun noPanelParamIn(
+        repository: KatanaRepository,
+        id: NoPanelParamId,
+    ): KatanaParameter = ControlBinding.noPanelParam(repository, id)
+
+    /** ⚠️ Mueve uno de los tres niveles sin perilla, en lo que muestra la UI. Sin confirmar. */
+    fun onNoPanelParamChanged(id: NoPanelParamId, value: Int) {
+        val active = repository ?: return
+        noPanelParamIn(active, id).setLevel(value)
+    }
+
+    /** GET de uno de los tres niveles sin perilla (CLAUDE.md §5). */
+    fun onReadNoPanelParamClicked(id: NoPanelParamId) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val parameter = noPanelParamIn(active, id)
+        viewModelScope.launch {
+            appendLog("→ GET ${id.logName} (${parameter.address}):")
+            val raw = parameter.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de ${id.logName}."
+            )
+        }
+    }
+
+    /** ⚠️ Cambia la forma del slot de Contour [slot] (0-based). Sin confirmar. */
+    fun onContourShapeChanged(slot: Int, value: Int) {
+        val active = repository ?: return
+        active.contourSlots.getOrNull(slot)?.shape?.set(value)
+    }
+
+    /** ⚠️ Mueve el Freq Shift del slot de Contour [slot] (0-based). Sin confirmar. */
+    fun onContourFreqShiftChanged(slot: Int, value: Int) {
+        val active = repository ?: return
+        active.contourSlots.getOrNull(slot)?.freqShift?.setLevel(value)
+    }
+
+    /**
+     * GET de los dos controles de un slot de Contour.
+     *
+     * ⚠️ Es **el único camino** por el que estos seis valores pueden llegar: caen fuera del
+     * rango del dump (CLAUDE.md §5), así que el botón no es solo para diagnóstico como en el
+     * resto de controles — es la comprobación de que el GET de respaldo funciona ahí.
+     */
+    fun onReadContourSlotClicked(slot: Int) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        val controls = active.contourSlots.getOrNull(slot) ?: return
+        viewModelScope.launch {
+            appendLog("→ GET contour ${slot + 1} (${controls.shape.address}, ${controls.freqShift.address}):")
+            val shape = controls.shape.read()
+            val freq = controls.freqShift.read()
+            appendLog(
+                if (shape != null || freq != null)
+                    "  ← el amp responde: shape=${shape ?: "—"}, freq shift=" +
+                        (freq?.let { controls.freqShift.scale.toDisplay(it) } ?: "—")
+                else "  · sin respuesta al GET de contour ${slot + 1} — está fuera del dump, así que sin esto no hay valor."
+            )
+        }
+    }
+
+    private fun eqControlFor(isEq2: Boolean, label: String): KatanaControl? {
+        val active = repository ?: return null
+        return (if (isEq2) active.eq2Params else active.eq1Params)[label]
+    }
+
+    private fun eqSpecFor(label: String): ParamSpec? =
+        EqParams.SPECS.firstOrNull { it.label == label }
+
+    /** ⚠️ Mueve un parámetro de EQ1 o EQ2, en lo que muestra la UI. Sin confirmar. */
+    fun onEqParamChanged(isEq2: Boolean, label: String, display: Double) {
+        val control = eqControlFor(isEq2, label) ?: return
+        val spec = eqSpecFor(label) ?: return
+        control.set(spec.kind.displayToRaw(display))
+    }
+
+    /** GET de un parámetro de EQ1 o EQ2 (CLAUDE.md §5). */
+    fun onReadEqParamClicked(isEq2: Boolean, label: String) {
+        val control = eqControlFor(isEq2, label) ?: return appendLog(NO_TRANSPORT)
+        val spec = eqSpecFor(label) ?: return
+        val name = if (isEq2) "eq2" else "eq1"
+        viewModelScope.launch {
+            appendLog("→ GET $name/$label (${control.address}):")
+            val raw = control.read()
+            appendLog(
+                if (raw != null) "  ← el amp responde: ${spec.kind.rawToDisplay(raw)} (crudo $raw)"
+                else "  · sin respuesta al GET de $name/$label."
+            )
+        }
+    }
+
+    // ❌ `onChainSlotChanged` se eliminó el 2026-09-06: reordenar la cadena a mano no funciona
+    // bien contra el amplificador y la UI ya no lo ofrece. Los veinte controles siguen
+    // registrados en `KatanaRepository.chainSlots` **para leerlos** — es lo que alimenta el
+    // diagrama del orden real. Ver BACKLOG.md.
+
+    // --- Guardado de presets (CLAUDE.md §5) -------------------------------------------------
+
+    /**
+     * ⚠️ **Guarda el estado editado en [channel] (`01`..`08`). Destructivo e irreversible sobre
+     * el amplificador**, y sin confirmación por SysEx — ver [KatanaRepository.savePreset].
+     *
+     * La UI ya pidió confirmación explícita antes de llegar aquí; esto no vuelve a preguntar.
+     * Lo que sí hace es **no dejar dos guardados a la vez** ([presetSaveInFlight]): el commit no
+     * se confirma y nadie ha documentado el intervalo mínimo entre dos, así que solaparlos sería
+     * meterse en territorio desconocido con una operación que no tiene deshacer.
+     *
+     * Todo el detalle sale por el log, que es donde el usuario puede ver qué se mandó y qué
+     * contestó el amplificador al leer de vuelta el nombre.
+     */
+    fun onSavePresetClicked(name: String, channel: Int) {
+        val active = repository ?: return appendLog(NO_TRANSPORT)
+        if (channel !in PresetSave.CHANNELS) {
+            return appendLog("! Canal destino inválido: $channel. No se guardó nada.")
+        }
+        if (!_presetSaveInFlight.compareAndSet(expect = false, update = true)) {
+            return appendLog("! Ya hay un guardado en curso; se ignora este.")
+        }
+        viewModelScope.launch {
+            try {
+                val label = PresetSave.channelLabel(channel)
+                appendLog("→ GUARDAR preset en $label (canal $channel) — destructivo:")
+                appendLog("  1. nombre → ${KatanaAddresses.CURRENT_PRESET_NAME}: \"$name\"")
+                appendLog("  2. commit → ${KatanaAddresses.PRESET_SAVE}: 00 %02X".format(channel))
+
+                val result = active.savePreset(name = name, channel = channel)
+
+                appendLog("  ${result.verdict}")
+                if (!result.nameMatches && result.storedName != null) {
+                    // El nombre es lo único observable; que no cuadre no prueba que el sonido
+                    // no se guardara, y decir "falló" a secas sería afirmar de más.
+                    appendLog(
+                        "  ⚠️ El nombre no confirma el guardado. Comprobar en el propio " +
+                            "amplificador si $label suena como se esperaba."
+                    )
+                }
+            } finally {
+                _presetSaveInFlight.value = false
+            }
+        }
+    }
+
     /** Turns one effect on or off. ✅ Confirmado, incluido `00` = off / `01` = on. */
     fun onEffectEnabledChanged(effect: EffectId, enabled: Boolean) {
         val active = repository ?: return
@@ -1345,11 +1884,21 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         _boosterParams.value = BoosterParamId.entries.associateWith { null }
         _boosterSoloEnabled.value = null
         _ampSoloLevel.value = null
+        _ampSoloEnabledPanel.value = null
+        _ampSoloLevelPanel.value = null
         _delayParams.value = DelayParamId.entries.associateWith { null }
         _reverbParams.value = ReverbParamId.entries.associateWith { null }
         _reverbTime.value = null
         _modChorusPreDelayLow.value = null
         _modChorusPreDelayHigh.value = null
+        _modFxInternalRaw.value = emptyMap()
+        _fxInternalRaw.value = emptyMap()
+        _noPanelParams.value = NoPanelParamId.entries.associateWith { null }
+        _contourSlots.value = List(KatanaAddresses.CONTOUR_SLOT_COUNT) { ContourSlotValues() }
+        _eq1Raw.value = emptyMap()
+        _eq2Raw.value = emptyMap()
+        _chainSlots.value = List(ChainBlock.SLOT_COUNT) { null }
+        _presetSaveInFlight.value = false
         _editMode.value = false
         transport?.close()
         transport = null
