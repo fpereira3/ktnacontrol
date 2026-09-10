@@ -2057,6 +2057,10 @@ seguimiento, no repite lo que ya está ahí.
     cadena `R.string.debug_connection_read_level`.
   - ✅ **El botón solo existe donde hay amplificador**, sin condición nueva: vive en `AmpScreen` y
     `EffectsScreen`, y el editor offline no las usa (usa las tres secciones sueltas, §4.2).
+- **2026-09-10** — CLAUDE.md adelgazado de 3943 a 599 líneas (260 KB → 44 KB): el detalle temático
+  se movió tal cual a `docs/referencia/` (8 archivos) y la narrativa a `docs/historial/` (3), con
+  verificación de pérdida cero; CLAUDE.md queda con reglas vigentes, "Lecciones del protocolo",
+  "Incógnitas abiertas", el mapa de `docs/` y un tope de 600 líneas en §8.
 
 ## En progreso
 
