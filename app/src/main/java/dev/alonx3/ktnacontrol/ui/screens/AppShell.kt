@@ -1,5 +1,11 @@
 package dev.alonx3.ktnacontrol.ui.screens
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,6 +15,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -16,9 +23,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import dev.alonx3.ktnacontrol.R
 import dev.alonx3.ktnacontrol.ui.theme.KTNAControlTheme
+import dev.alonx3.ktnacontrol.ui.theme.Spacing
 import dev.alonx3.ktnacontrol.usb.UsbConnectionState
 
 /**
@@ -45,7 +52,7 @@ internal fun ConnectionBadge(state: UsbConnectionState, modifier: Modifier = Mod
     }
     Text(
         text = label,
-        modifier = modifier.padding(end = 8.dp),
+        modifier = modifier.padding(end = Spacing.sm),
         style = MaterialTheme.typography.labelMedium,
         // El color es la parte que se lee de reojo: solo "conectado" merece el color normal.
         color = when (indicator) {
@@ -66,11 +73,20 @@ internal fun ConnectionBadge(state: UsbConnectionState, modifier: Modifier = Mod
  */
 @Composable
 internal fun ShellBottomBar(current: DebugSection, onSelect: (DebugSection) -> Unit) {
-    NavigationBar {
+    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         DebugSection.PRIMARY.forEach { section ->
+            val selected = section == current
             NavigationBarItem(
-                selected = section == current,
+                selected = selected,
                 onClick = { onSelect(section) },
+                // La pestaña activa se marca con el contenedor del acento, no con el acento a
+                // pleno: una pastilla ámbar saturada detrás del texto compite con los sliders,
+                // que son lo que de verdad hay que mirar.
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                ),
                 // ⚠️ **Sin iconos, y es una decisión, no un olvido**: los `Icons.Filled` de
                 // Material viven en `material-icons-core`, que **no está en el classpath** de
                 // este proyecto. Añadir una dependencia por tres pictogramas contradice la regla
@@ -78,11 +94,46 @@ internal fun ShellBottomBar(current: DebugSection, onSelect: (DebugSection) -> U
                 // de tres entradas con el nombre escrito se entiende igual — mejor, de hecho,
                 // que un icono que haya que adivinar. El nombre va en la ranura del icono porque
                 // es lo único que hay: poner el mismo texto dos veces sería peor.
-                icon = { Text(stringResource(section.titleRes)) },
+                //
+                // ⚠️ **Las tres entradas miden lo mismo, y antes no** (QA 2026-09-09, bloque C):
+                // solo la activa llevaba la pastilla del indicador, así que la seleccionada se
+                // veía más grande que las otras dos y la barra "saltaba" al cambiar de pestaña.
+                // Ahora **todas** llevan la misma caja —mismo ancho mínimo, mismo alto, mismo
+                // borde—, y lo único que cambia con la selección son el color del borde y el del
+                // texto. Un borde visible en las tres es además lo que hace que se lean como
+                // botones de un panel y no como tres palabras sueltas.
+                icon = {
+                    Box(
+                        modifier = Modifier
+                            .widthIn(min = NAV_ITEM_MIN_WIDTH)
+                            .height(NAV_ITEM_HEIGHT)
+                            .border(
+                                width = NAV_ITEM_BORDER,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.outline
+                                },
+                                shape = MaterialTheme.shapes.small,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(section.titleRes),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                        )
+                    }
+                },
             )
         }
     }
 }
+
+/** Lo que hace que las tres entradas de la barra midan igual. Ver [ShellBottomBar]. */
+private val NAV_ITEM_MIN_WIDTH = 88.dp
+private val NAV_ITEM_HEIGHT = 36.dp
+private val NAV_ITEM_BORDER = 1.dp
 
 /**
  * **El estado de "aquí no se puede hacer nada, y esto es lo que falta".**
@@ -109,14 +160,14 @@ internal fun NoAmpNotice(
     mentionLibrary: Boolean = true,
 ) {
     Card(
-        modifier = modifier.fillMaxWidth().padding(vertical = 8.dp),
+        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.sm),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
         ),
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
             Text(
                 text = stringResource(R.string.no_amp_title),
@@ -176,7 +227,7 @@ internal fun AdvancedAction(current: DebugSection, onSelect: (DebugSection) -> U
 @Composable
 private fun ShellPiecesPreview() {
     KTNAControlTheme {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(Spacing.md)) {
             listOf(
                 UsbConnectionState.Connected("KATANA"),
                 UsbConnectionState.Searching,

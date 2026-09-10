@@ -12,6 +12,9 @@ import dev.alonx3.ktnacontrol.device.KatanaRepository
 import dev.alonx3.ktnacontrol.protocol.Address
 import dev.alonx3.ktnacontrol.protocol.MemoryImage
 import dev.alonx3.ktnacontrol.protocol.AmpCategory
+import dev.alonx3.ktnacontrol.protocol.ChainPreset
+import dev.alonx3.ktnacontrol.protocol.AmpVariationUi
+import dev.alonx3.ktnacontrol.protocol.AmpVariation
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.BoostType
 import dev.alonx3.ktnacontrol.protocol.DelayType
@@ -395,6 +398,29 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         }
 
         /**
+         * **Cambió la cadena predefinida** (`60 00 06 20`), así que el array de veinte ranuras
+         * que alimenta el diagrama ya no vale (QA 2026-09-09, bloque A.2).
+         *
+         * ⚠️ Este era el bug de "el diagrama no cambia nunca". Elegir una cadena reescribe
+         * `60 00 06 00`–`06 13` **dentro del amplificador**, pero nada en la app volvía a
+         * leerlas: la caché seguía con las veinte de antes y el diagrama se quedaba congelado.
+         *
+         * Se resuelve **reusando el coordinador de recargas** en vez de inventar un camino
+         * nuevo, que es justo lo que CLAUDE.md §4.4 documenta como la lección cara: dos caminos
+         * de recarga independientes fue lo que produjo los dumps solapados. Pasando por el mismo
+         * `MutableStateFlow` conflado, un cambio de cadena mientras hay un dump en vuelo lo
+         * cancela y relanza uno solo, igual que un cambio de canal.
+         *
+         * ✅ **Y no hay bucle**, por el mismo motivo que el canal: la recarga vuelve a leer
+         * `06 20` del dump, pero un `StateFlow` no reemite un valor igual al que ya tiene. Si el
+         * amplificador **rechazara** la escritura, la caché volvería al valor viejo y dispararía
+         * una segunda recarga que ya lee lo mismo — se para en dos, no gira.
+         */
+        data class ChainChanged(val chainType: Int) : ReloadRequest {
+            override val reason: String = "el cambio de cadena"
+        }
+
+        /**
          * El usuario pidió releer, con el botón de refresco.
          *
          * ⚠️ **[nonce] no es decoración: sin él el botón funcionaría una sola vez.**
@@ -436,6 +462,14 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
      * caso típico es el GET de respaldo del propio dump, que lo vuelve a leer.
      */
     private var loadedChannel: Int? = null
+
+    /**
+     * Cadena predefinida para la que valen las veinte ranuras cargadas ahora mismo.
+     *
+     * El gemelo de [loadedChannel] para [ReloadRequest.ChainChanged], y por el mismo motivo: sin
+     * él, el propio dump —que relee `06 20`— dispararía otra recarga en bucle.
+     */
+    private var loadedChainType: Int? = null
 
     /**
      * Último canal que pidió la app, hasta que una recarga confirme si el amplificador lo
@@ -1114,6 +1148,26 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                     requests.value = ReloadRequest.ChannelChanged(channel)
                 }
             }
+            // La cadena predefinida reordena las veinte ranuras dentro del amplificador, así
+            // que hay que releerlas — ver [ReloadRequest.ChainChanged].
+            //
+            // ⚠️ **Pero no mientras hay una recarga en vuelo, y esto no es una optimización.**
+            // A diferencia del canal —que vive fuera del dump y se repuebla con un GET de
+            // respaldo, al final de `loadFromDump`—, `06 20` **está dentro del dump** y se
+            // repuebla **a mitad** de la recarga. Sin este guard, la primera vez que el dump
+            // trae la cadena, el `collectLatest` recibe un valor nuevo, **cancela la recarga en
+            // vuelo** y lanza otra: un dump de más en cada conexión, y el primero tirado a la
+            // basura a medio aplicar. Lo destapó un test antes de que llegara al amplificador.
+            //
+            // Lo que se pierde: si alguien cambia de cadena justo mientras se está recargando,
+            // ese cambio no dispara su propia relectura. Es un hueco pequeño y recuperable con
+            // el botón de refresco, y mucho más barato que el bucle que evita.
+            launch {
+                repository.chainType.state.filterNotNull().collect { chainType ->
+                    if (_reloadInFlight.value) return@collect
+                    requests.value = ReloadRequest.ChainChanged(chainType)
+                }
+            }
             requests.collectLatest { request ->
                 when (request) {
                     is ReloadRequest.ChannelChanged -> {
@@ -1124,6 +1178,19 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
                         if (request.channel == loadedChannel) return@collectLatest
                         appendLog(
                             "↻ Canal ${describeChannel(request.channel)}: releyendo todo el estado..."
+                        )
+                    }
+
+                    is ReloadRequest.ChainChanged -> {
+                        // Mismo guard y mismo margen que el canal, y por las mismas dos razones:
+                        // no releer cuando el "cambio" es el propio dump devolviendo el valor que
+                        // ya teníamos, y darle tiempo al amplificador a reordenar la cadena de
+                        // verdad antes de preguntarle cómo quedó.
+                        if (request.chainType == loadedChainType) return@collectLatest
+                        delay(CHANNEL_RELOAD_SETTLE_MS)
+                        if (request.chainType == loadedChainType) return@collectLatest
+                        appendLog(
+                            "↻ Cadena ${describeChain(request.chainType)}: releyendo el estado..."
                         )
                     }
 
@@ -1150,6 +1217,7 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
             _reloadInFlight.value = false
         }
         loadedChannel = repository.channel.state.value
+        loadedChainType = repository.chainType.state.value
         logDumpLoad(load)
         if (load.messages == 0) {
             appendLog("  ! Tras $reason el dump no contestó; el estado puede estar viejo.")
@@ -1189,6 +1257,10 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         in 5..8 -> "B${value - 4}"
         else -> "desconocido ($value)"
     }
+
+    /** El nombre que Boss le da a la cadena, no su número — ver [ChainPreset]. */
+    private fun describeChain(value: Int): String =
+        ChainPreset.fromValue(value)?.displayName ?: "desconocida ($value)"
 
     private fun logDumpLoad(load: KatanaRepository.DumpLoad) {
         if (load.messages == 0) {
@@ -1267,25 +1339,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         ControlBinding.level(repository, id)
 
     /**
-     * Reads one level straight from the amp: the GET half of an address test (CLAUDE.md §5).
-     *
-     * A write that never landed and a write the amp accepts but ignores look identical from
-     * the app; this plus the ear is what tells them apart.
-     */
-    fun onReadLevelClicked(id: LevelId) {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = parameterIn(active, id)
-        viewModelScope.launch {
-            appendLog("→ GET ${id.logName} (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de ${id.logName}."
-            )
-        }
-    }
-
-    /**
      * Moves one level, in what the UI shows. Optimistic and debounced, so the slider never
      * lags the finger.
      *
@@ -1326,16 +1379,16 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
      */
     fun onAmpVariationChanged(enabled: Boolean) {
         val active = repository ?: return
-        val category = AmpCategory.fromValue(_selectors.value[SelectorId.AMP_CATEGORY] ?: return)
-        if (category == null) {
+        val current = _selectors.value
+        val target = AmpVariation.modelFor(
+            model = current[SelectorId.AMP_TYPE],
+            panelCategory = current[SelectorId.AMP_CATEGORY],
+            on = enabled,
+        )
+        if (target == null) {
             appendLog("  ! Variación: no se sabe en qué canal está el amp, no se envía nada.")
             return
         }
-        if (!ampVariationApplies.value) {
-            appendLog("  ! Variación: el modelo actual no es uno de los cinco canales base.")
-            return
-        }
-        val target = category.typeValue(enabled)
         appendLog(
             "→ Variación ${if (enabled) "ON" else "OFF"} vía modelo: " +
                 "${AmpType.fromValue(target)?.displayName ?: target}"
@@ -1344,21 +1397,29 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     }
 
     /**
-     * Whether the VARIATION switch means anything right now.
+     * Lo que la UI necesita del switch de variación: si se puede tocar y si está encendido.
      *
-     * Only the ten types that pair up with the five knob positions have a variation. With one
-     * of the individual models active, toggling would have to guess a channel to jump to, and
-     * that would silently change the amp — so the switch is disabled instead.
+     * ⚠️ **Un solo flujo para las dos preguntas, y sale de [AmpVariationUi]** (QA 2026-09-09,
+     * bloque A.1). Antes eran dos respuestas con **fuentes distintas** —"¿aplica?" miraba el
+     * modelo y "¿está puesta?" miraba el LED `06 5C`—, que es exactamente lo que dejaba el
+     * switch bloqueado en cuatro de los cinco canales y sin camino de vuelta. El porqué de cada
+     * síntoma está en el KDoc de [AmpVariation].
      *
-     * True while the model is unknown, so the control is not dead on arrival before the first
-     * read comes back.
+     * Arranca en "aplica, apagado" para que el control no nazca muerto antes de la primera
+     * lectura.
      */
-    val ampVariationApplies: StateFlow<Boolean> = _selectors
+    val ampVariation: StateFlow<AmpVariationUi> = _selectors
         .map { current ->
-            val type = current[SelectorId.AMP_TYPE]?.let { AmpType.fromValue(it) }
-            type == null || type.category != null
+            AmpVariationUi.of(
+                model = current[SelectorId.AMP_TYPE],
+                panelCategory = current[SelectorId.AMP_CATEGORY],
+            )
         }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            AmpVariationUi(applies = true, on = false),
+        )
 
     /** Picks the green / red / yellow bank of one effect. ✅ Confirmado. */
     fun onEffectColorChanged(effect: EffectId, value: Int) {
@@ -1420,20 +1481,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         boosterParamIn(active, id).setLevel(value)
     }
 
-    /** GET half of the audio test for one Booster parameter (CLAUDE.md §5). */
-    fun onReadBoosterParamClicked(id: BoosterParamId) {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = boosterParamIn(active, id)
-        viewModelScope.launch {
-            appendLog("→ GET booster ${id.logName} (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de booster ${id.logName}."
-            )
-        }
-    }
-
     /** Turns Booster's Solo mode on or off (`60 00 00 15`). ✅ Confirmado con audio. */
     fun onBoosterSoloEnabledChanged(enabled: Boolean) {
         val active = repository ?: return
@@ -1445,20 +1492,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     fun onAmpSoloLevelChanged(value: Int) {
         val active = repository ?: return
         active.ampSoloLevel.setLevel(value)
-    }
-
-    /** GET half of the audio test for the amp's Solo Level (CLAUDE.md §5). */
-    fun onReadAmpSoloLevelClicked() {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = active.ampSoloLevel
-        viewModelScope.launch {
-            appendLog("→ GET amp solo level (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de amp solo level."
-            )
-        }
     }
 
     // --- Diagnóstico: la segunda candidata del Solo del amplificador ----------------------
@@ -1477,25 +1510,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     fun onAmpSoloPanelLevelChanged(value: Int) {
         val active = repository ?: return
         active.ampSoloLevelPanel.setLevel(value)
-    }
-
-    /** ⚠️ Diagnóstico: GET a las dos direcciones de la segunda candidata. */
-    fun onReadAmpSoloPanelClicked() {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        viewModelScope.launch {
-            val switch = active.ampSoloEnabledPanel
-            appendLog("→ GET solo sw candidata 2 (${switch.address}):")
-            val raw = switch.read()
-            appendLog(if (raw != null) "  ← el amp responde: $raw" else "  · sin respuesta.")
-
-            val level = active.ampSoloLevelPanel
-            appendLog("→ GET solo level candidata 2 (${level.address}):")
-            val rawLevel = level.read()
-            appendLog(
-                if (rawLevel != null) "  ← el amp responde: ${level.scale.toDisplay(rawLevel)} (crudo $rawLevel)"
-                else "  · sin respuesta."
-            )
-        }
     }
 
     // --- Diagnóstico: SET seguido de GET inmediato ----------------------------------------
@@ -1564,20 +1578,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         delayParamIn(active, id).setLevel(value)
     }
 
-    /** GET half of the audio test for one Delay 1 parameter (CLAUDE.md §5). */
-    fun onReadDelayParamClicked(id: DelayParamId) {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = delayParamIn(active, id)
-        viewModelScope.launch {
-            appendLog("→ GET delay ${id.logName} (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de delay ${id.logName}."
-            )
-        }
-    }
-
     private fun reverbParamIn(repository: KatanaRepository, id: ReverbParamId): KatanaParameter =
         ControlBinding.reverbParam(repository, id)
 
@@ -1585,20 +1585,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     fun onReverbParamChanged(id: ReverbParamId, value: Int) {
         val active = repository ?: return
         reverbParamIn(active, id).setLevel(value)
-    }
-
-    /** GET half of the audio test for one Reverb parameter (CLAUDE.md §5). */
-    fun onReadReverbParamClicked(id: ReverbParamId) {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = reverbParamIn(active, id)
-        viewModelScope.launch {
-            appendLog("→ GET reverb ${id.logName} (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de reverb ${id.logName}."
-            )
-        }
     }
 
     // --- Parámetros con paso fraccionario (CLAUDE.md §5.2) ---------------------------------
@@ -1612,20 +1598,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         active.reverbTime.setLevel(value)
     }
 
-    /** GET half of the audio test for Reverb Time (CLAUDE.md §5). */
-    fun onReadReverbTimeClicked() {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = active.reverbTime
-        viewModelScope.launch {
-            appendLog("→ GET reverb time (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de reverb time."
-            )
-        }
-    }
-
     /**
      * Moves the Low band of Mod's 2x2 Chorus Pre Delay (`60 00 02 3A`), in display ms.
      * Optimistic, debounced. Only meaningful while Mod's active type is 2x2 Chorus — see
@@ -1636,38 +1608,10 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         active.modChorusPreDelayLow.setLevel(value)
     }
 
-    /** GET half of the audio test for the Low band (CLAUDE.md §5). */
-    fun onReadModChorusPreDelayLowClicked() {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = active.modChorusPreDelayLow
-        viewModelScope.launch {
-            appendLog("→ GET mod chorus pre delay low (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de mod chorus pre delay low."
-            )
-        }
-    }
-
     /** Same as [onModChorusPreDelayLowChanged], the High band (`60 00 02 3E`). */
     fun onModChorusPreDelayHighChanged(value: Double) {
         val active = repository ?: return
         active.modChorusPreDelayHigh.setLevel(value)
-    }
-
-    /** GET half of the audio test for the High band (CLAUDE.md §5). */
-    fun onReadModChorusPreDelayHighClicked() {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = active.modChorusPreDelayHigh
-        viewModelScope.launch {
-            appendLog("→ GET mod chorus pre delay high (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de mod chorus pre delay high."
-            )
-        }
     }
 
     // --- Parámetros internos de los 31 tipos de Mod/FX (CLAUDE.md §5.2) --------------------
@@ -1698,21 +1642,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         control.set(spec.kind.displayToRaw(display))
     }
 
-    /** GET half of the audio test for one internal Mod/FX parameter (CLAUDE.md §5). */
-    fun onReadModFxParamClicked(isFx: Boolean, type: ModFxType, label: String) {
-        val control = modFxControlFor(isFx, type, label) ?: return appendLog(NO_TRANSPORT)
-        val spec = modFxSpecFor(type, label) ?: return
-        val effectName = if (isFx) "fx" else "mod"
-        viewModelScope.launch {
-            appendLog("→ GET $effectName ${type.displayName}/$label (${control.address}):")
-            val raw = control.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${spec.kind.rawToDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de $effectName ${type.displayName}/$label."
-            )
-        }
-    }
-
     // --- Controles sin perilla física (CLAUDE.md §5) ---------------------------------------
 
     private fun noPanelParamIn(
@@ -1726,20 +1655,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         noPanelParamIn(active, id).setLevel(value)
     }
 
-    /** GET de uno de los tres niveles sin perilla (CLAUDE.md §5). */
-    fun onReadNoPanelParamClicked(id: NoPanelParamId) {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val parameter = noPanelParamIn(active, id)
-        viewModelScope.launch {
-            appendLog("→ GET ${id.logName} (${parameter.address}):")
-            val raw = parameter.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${parameter.scale.toDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de ${id.logName}."
-            )
-        }
-    }
-
     /** ⚠️ Cambia la forma del slot de Contour [slot] (0-based). Sin confirmar. */
     fun onContourShapeChanged(slot: Int, value: Int) {
         val active = repository ?: return
@@ -1750,29 +1665,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
     fun onContourFreqShiftChanged(slot: Int, value: Int) {
         val active = repository ?: return
         active.contourSlots.getOrNull(slot)?.freqShift?.setLevel(value)
-    }
-
-    /**
-     * GET de los dos controles de un slot de Contour.
-     *
-     * ⚠️ Es **el único camino** por el que estos seis valores pueden llegar: caen fuera del
-     * rango del dump (CLAUDE.md §5), así que el botón no es solo para diagnóstico como en el
-     * resto de controles — es la comprobación de que el GET de respaldo funciona ahí.
-     */
-    fun onReadContourSlotClicked(slot: Int) {
-        val active = repository ?: return appendLog(NO_TRANSPORT)
-        val controls = active.contourSlots.getOrNull(slot) ?: return
-        viewModelScope.launch {
-            appendLog("→ GET contour ${slot + 1} (${controls.shape.address}, ${controls.freqShift.address}):")
-            val shape = controls.shape.read()
-            val freq = controls.freqShift.read()
-            appendLog(
-                if (shape != null || freq != null)
-                    "  ← el amp responde: shape=${shape ?: "—"}, freq shift=" +
-                        (freq?.let { controls.freqShift.scale.toDisplay(it) } ?: "—")
-                else "  · sin respuesta al GET de contour ${slot + 1} — está fuera del dump, así que sin esto no hay valor."
-            )
-        }
     }
 
     private fun eqControlFor(isEq2: Boolean, label: String): KatanaControl? {
@@ -1788,21 +1680,6 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         val control = eqControlFor(isEq2, label) ?: return
         val spec = eqSpecFor(label) ?: return
         control.set(spec.kind.displayToRaw(display))
-    }
-
-    /** GET de un parámetro de EQ1 o EQ2 (CLAUDE.md §5). */
-    fun onReadEqParamClicked(isEq2: Boolean, label: String) {
-        val control = eqControlFor(isEq2, label) ?: return appendLog(NO_TRANSPORT)
-        val spec = eqSpecFor(label) ?: return
-        val name = if (isEq2) "eq2" else "eq1"
-        viewModelScope.launch {
-            appendLog("→ GET $name/$label (${control.address}):")
-            val raw = control.read()
-            appendLog(
-                if (raw != null) "  ← el amp responde: ${spec.kind.rawToDisplay(raw)} (crudo $raw)"
-                else "  · sin respuesta al GET de $name/$label."
-            )
-        }
     }
 
     // ❌ `onChainSlotChanged` se eliminó el 2026-09-06: reordenar la cadena a mano no funciona
@@ -1873,6 +1750,7 @@ class DebugConnectionViewModel(application: Application) : AndroidViewModel(appl
         reloadJob = null
         reloadRequests = null
         loadedChannel = null
+        loadedChainType = null
         requestedChannel = null
         repository?.close()
         repository = null

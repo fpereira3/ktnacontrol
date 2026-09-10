@@ -5,6 +5,8 @@ import dev.alonx3.ktnacontrol.device.KatanaParameter
 import dev.alonx3.ktnacontrol.device.KatanaRepository
 import dev.alonx3.ktnacontrol.device.OfflineKatanaLink
 import dev.alonx3.ktnacontrol.protocol.AmpCategory
+import dev.alonx3.ktnacontrol.protocol.AmpVariationUi
+import dev.alonx3.ktnacontrol.protocol.AmpVariation
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
 import dev.alonx3.ktnacontrol.protocol.MemoryImage
@@ -44,8 +46,8 @@ data class EditorState(
     val eq1Raw: Map<String, Int?> = emptyMap(),
     val eq2Raw: Map<String, Int?> = emptyMap(),
     val chainSlots: List<Int?> = emptyList(),
-    /** Si el switch de variación tiene a qué referirse — ver `KatanaAddresses.AMP_VARIATION`. */
-    val variationApplies: Boolean = false,
+    /** Si el switch de variación aplica y cómo está — ver `AmpVariation` en protocol/. */
+    val variation: AmpVariationUi = AmpVariationUi(applies = false, on = false),
     /** Hay cambios sin guardar. */
     val dirty: Boolean = false,
 )
@@ -146,12 +148,14 @@ class PresetEditor(
             eq1Raw = repository.eq1Params.mapValues { (_, control) -> control.state.value },
             eq2Raw = repository.eq2Params.mapValues { (_, control) -> control.state.value },
             chainSlots = repository.chainSlots.map { it.state.value },
-            // El switch de variación solo tiene sentido sobre uno de los cinco canales base o
-            // su gemelo `Var [...]`; con cualquier otro modelo no hay a qué referirse.
-            variationApplies = ampType != null &&
-                AmpCategory.entries.any { category ->
-                    category.typeValue(false) == ampType || category.typeValue(true) == ampType
-                },
+            // ⚠️ **La misma función que el camino en vivo** (`AmpVariation`), no una copia:
+            // este bloque tenía su propia versión del "¿aplica?" y se quedó atrás cuando el de
+            // en vivo se arregló (QA 2026-09-09, A.1). Aquí el modelo casi siempre basta, pero
+            // caer a la perilla de panel es gratis y mantiene las dos ramas idénticas.
+            variation = AmpVariationUi.of(
+                model = ampType,
+                panelCategory = repository.ampCategory.state.value,
+            ),
             dirty = dirty,
         )
     }
@@ -193,9 +197,12 @@ class PresetEditor(
      * exactamente el mismo que escribiría el camino en vivo.
      */
     fun onAmpVariationChanged(enabled: Boolean) = edit {
-        val category = AmpCategory.fromValue(repository.ampCategory.state.value ?: return@edit)
-            ?: return@edit
-        repository.ampType.set(category.typeValue(enabled))
+        val target = AmpVariation.modelFor(
+            model = repository.ampType.state.value,
+            panelCategory = repository.ampCategory.state.value,
+            on = enabled,
+        ) ?: return@edit
+        repository.ampType.set(target)
     }
 
     fun onEffectColorChanged(effect: EffectId, value: Int) =

@@ -109,13 +109,15 @@ enum class BoosterParamId(
     /** The range the slider shows, matching the control's `LevelScale.displayRange`. */
     val displayRange: IntRange,
     val logName: String,
+    /** Solo el nombre, para la tira vertical. Ver [LevelId.shortLabelRes]. */
+    @param:StringRes val shortLabelRes: Int,
 ) {
-    DRIVE(R.string.booster_drive_level, 0..120, "drive"),
-    BOTTOM(R.string.booster_bottom_level, -50..50, "bottom"),
-    TONE(R.string.booster_tone_level, -50..50, "tone"),
-    SOLO_LEVEL(R.string.booster_solo_level, 0..100, "solo level"),
-    EFFECT_LEVEL(R.string.booster_effect_level, 0..100, "effect level"),
-    DIRECT_MIX(R.string.booster_direct_mix_level, 0..100, "direct mix"),
+    DRIVE(R.string.booster_drive_level, 0..120, "drive", R.string.short_drive),
+    BOTTOM(R.string.booster_bottom_level, -50..50, "bottom", R.string.short_bottom),
+    TONE(R.string.booster_tone_level, -50..50, "tone", R.string.short_tone),
+    SOLO_LEVEL(R.string.booster_solo_level, 0..100, "solo level", R.string.short_solo_level),
+    EFFECT_LEVEL(R.string.booster_effect_level, 0..100, "effect level", R.string.short_effect_level),
+    DIRECT_MIX(R.string.booster_direct_mix_level, 0..100, "direct mix", R.string.short_direct_mix),
 }
 
 /**
@@ -131,11 +133,13 @@ enum class DelayParamId(
     @param:StringRes val labelRes: Int,
     val displayRange: IntRange,
     val logName: String,
+    /** Solo el nombre, para la tira vertical. Ver [LevelId.shortLabelRes]. */
+    @param:StringRes val shortLabelRes: Int,
 ) {
-    TIME(R.string.delay_time, 1..2000, "time"),
-    FEEDBACK(R.string.delay_feedback, 0..100, "feedback"),
-    EFFECT_LEVEL(R.string.delay_effect_level, 0..120, "effect level"),
-    DIRECT_MIX(R.string.delay_direct_mix, 0..100, "direct mix"),
+    TIME(R.string.delay_time, 1..2000, "time", R.string.short_time),
+    FEEDBACK(R.string.delay_feedback, 0..100, "feedback", R.string.short_feedback),
+    EFFECT_LEVEL(R.string.delay_effect_level, 0..120, "effect level", R.string.short_effect_level),
+    DIRECT_MIX(R.string.delay_direct_mix, 0..100, "direct mix", R.string.short_direct_mix),
 }
 
 /**
@@ -155,10 +159,12 @@ enum class ReverbParamId(
     @param:StringRes val labelRes: Int,
     val displayRange: IntRange,
     val logName: String,
+    /** Solo el nombre, para la tira vertical. Ver [LevelId.shortLabelRes]. */
+    @param:StringRes val shortLabelRes: Int,
 ) {
-    PRE_DELAY(R.string.reverb_pre_delay, 0..500, "pre delay"),
-    DENSITY(R.string.reverb_density, 0..10, "density"),
-    DIRECT_MIX(R.string.reverb_direct_mix, 0..100, "direct mix"),
+    PRE_DELAY(R.string.reverb_pre_delay, 0..500, "pre delay", R.string.short_pre_delay),
+    DENSITY(R.string.reverb_density, 0..10, "density", R.string.short_density),
+    DIRECT_MIX(R.string.reverb_direct_mix, 0..100, "direct mix", R.string.short_direct_mix),
 }
 
 /**
@@ -177,13 +183,15 @@ enum class NoPanelParamId(
     /** El rango que muestra el slider, igual que el `displayRange` de su `LevelScale`. */
     val displayRange: IntRange,
     val logName: String,
+    /** Solo el nombre, para la tira vertical. Ver [LevelId.shortLabelRes]. */
+    @param:StringRes val shortLabelRes: Int,
 ) {
-    NOISE_GATE_THRESHOLD(R.string.noise_gate_threshold, 0..100, "noise gate threshold"),
-    NOISE_GATE_RELEASE(R.string.noise_gate_release, 0..100, "noise gate release"),
+    NOISE_GATE_THRESHOLD(R.string.noise_gate_threshold, 0..100, "noise gate threshold", R.string.short_threshold),
+    NOISE_GATE_RELEASE(R.string.noise_gate_release, 0..100, "noise gate release", R.string.short_release),
 
     /**
      * ⚠️ El Freq Shift del Contour **activo** (`60 00 06 1A`), centrado en cero — no confundir
      * con el de cada slot, que vive fuera del dump y va por [contourSlots].
      */
-    CONTOUR_FREQ_SHIFT(R.string.contour_freq_shift, -50..50, "contour freq shift"),
+    CONTOUR_FREQ_SHIFT(R.string.contour_freq_shift, -50..50, "contour freq shift", R.string.short_freq_shift),
 }

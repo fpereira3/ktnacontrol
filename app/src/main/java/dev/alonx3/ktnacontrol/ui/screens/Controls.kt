@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.alonx3.ktnacontrol.R
+import dev.alonx3.ktnacontrol.ui.theme.Spacing
 import kotlin.math.roundToInt
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.layout.onSizeChanged
@@ -38,6 +40,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.unit.IntOffset
@@ -54,6 +57,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 
 /**
  * Los controles sueltos que comparten la pantalla de diagnóstico y la de Biblioteca.
@@ -67,12 +82,69 @@ import androidx.compose.runtime.rememberUpdatedState
  * widget sepa nada de ficheros ni de amplificadores.
  */
 
+/**
+ * El encabezado de un bloque de controles.
+ *
+ * Va en `secondary` —el acero frío del tema— y no en el color de texto normal: es una **etiqueta
+ * de panel**, no contenido. El `letterSpacing` que lo separa viene de `titleSmall`
+ * (`ui/theme/Type.kt`), que existe justo para esto. Ver CLAUDE.md §4.6.
+ */
+/**
+ * **El último paso de una escritura sin deshacer al amplificador**: guardar en un canal y
+ * enviar un preset lo comparten (CLAUDE.md §4.7, Fase 4).
+ *
+ * ⚠️ **Solo cubre a esos dos, no a "Guardar"/"Guardar como" de la Biblioteca.** Guardar en
+ * canal y enviar tienen la misma forma —un primer paso que junta datos (nombre+canal, o la
+ * revisión de qué se manda) y un segundo paso que **solo confirma**, sin pedir nada nuevo—; eso
+ * es lo que este composable pinta. Guardar/Guardar como es de un solo paso a propósito: sobrescribir
+ * un fichero de la Biblioteca se avisa en la misma pantalla donde se teclea el nombre, porque no
+ * hace falta la misma cautela que escribir en hardware sin deshacer — la decisión completa y su
+ * porqué están en CLAUDE.md §4.7.
+ *
+ * Aquí no hay lógica ninguna: [title], [body] y [confirmLabel] ya vienen resueltos por quien
+ * llama (la lógica de qué texto toca la fija cada flujo, no esto). Lo único que fija este
+ * composable es **el aspecto**: el mismo título, el mismo tono en el cuerpo y el mismo patrón de
+ * verbo — "Sí, <verbo>" — en el botón que de verdad ejecuta la escritura.
+ */
+@Composable
+internal fun DestructiveConfirmDialog(
+    title: String,
+    body: String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onBack: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onBack,
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel) } },
+        dismissButton = {
+            TextButton(onClick = onBack) { Text(stringResource(R.string.dialog_back)) }
+        },
+    )
+}
+
+/**
+ * El encabezado de una sección.
+ *
+ * ⚠️ **Pasa el texto a mayúsculas aquí, no en `strings.xml`** (QA 2026-09-09, bloque C). Los
+ * títulos de sección van en mayúscula porque es lo que hace que se lean como la serigrafía de un
+ * panel de instrumento y no como un párrafo — es la misma intención que el `letterSpacing` de
+ * `titleSmall` (CLAUDE.md §4.6). Ponerlo en el recurso obligaría a gritar en cada cadena y las
+ * dejaría inservibles para cualquier otro uso; hacerlo aquí lo aplica en un solo sitio y deja el
+ * texto original intacto para quien lo necesite.
+ *
+ * Se usa `Locale.ROOT` a propósito: es una transformación de presentación, no lingüística, y con
+ * el locale del dispositivo el turco convertiría la `i` en `İ`.
+ */
 @Composable
 internal fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
-        text = text,
-        modifier = modifier.padding(top = 8.dp, bottom = 4.dp),
+        text = text.uppercase(java.util.Locale.ROOT),
+        modifier = modifier.padding(top = Spacing.md, bottom = Spacing.xs),
         style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.secondary,
     )
 }
 
@@ -229,33 +301,20 @@ internal fun SwitchRow(
  * One 0..100 level.
  *
  * Deliberately a bare [Slider] — the point is to validate the read / write / cache path
- * against the amp, not the visual design. The GET button sits next to the name so that adding
- * a parameter is one more block and never a row of buttons growing until it overflows.
+ * against the amp, not the visual design.
+ *
+ * ⚠️ **Ya no lleva botón de "leer"** (2026-09-10): el GET dejó de ser por parámetro y pasó a ser
+ * uno solo por pantalla. Ver el KDoc de [VerticalBarControl].
  *
  * Disabled until the level is known: a slider that reads 0 because nothing was read yet would
  * send a 0 on first touch and silently change the amp.
  */
-/**
- * Si los botones de "leer" (el GET individual) se enseñan.
- *
- * Existe por un motivo concreto: los mismos controles sirven para el amplificador en vivo y
- * para editar un preset de fichero (CLAUDE.md §4.5), y **offline un botón de "leer del
- * amplificador" no significa nada** — leería de la misma imagen en memoria que ya se está
- * enseñando. Sería un botón que no hace nada, que es peor que no tenerlo.
- *
- * Se resuelve con un `CompositionLocal` y no con un parámetro porque los sitios donde se pasa
- * un `onRead` son medio centenar: un parámetro obligaría a tocarlos todos para expresar una
- * decisión que en realidad es de la pantalla entera, no de cada slider.
- */
-internal val LocalReadButtonsVisible = androidx.compose.runtime.compositionLocalOf { true }
-
 @Composable
 internal fun LevelControl(
     label: String,
     level: Int?,
     enabled: Boolean,
     onLevelChanged: (Int) -> Unit,
-    onRead: () -> Unit,
     modifier: Modifier = Modifier,
     /**
      * Every panel/EQ/effect level is `0..100`, so that stays the default. Booster's internal
@@ -265,16 +324,7 @@ internal fun LevelControl(
     valueRange: ClosedFloatingPointRange<Float> = 0f..100f,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium)
-            if (LocalReadButtonsVisible.current) TextButton(onClick = onRead, enabled = enabled) {
-                Text(stringResource(R.string.debug_connection_read_level))
-            }
-        }
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
         Slider(
             value = (level ?: 0).toFloat(),
             onValueChange = { value -> onLevelChanged(value.roundToInt()) },
@@ -284,46 +334,6 @@ internal fun LevelControl(
     }
 }
 /**
- * Same as [LevelControl] but for a [KatanaFractionalParameter][dev.alonx3.ktnacontrol.device.KatanaFractionalParameter]:
- * the value shown and dragged is a `Double`, not an `Int` — CLAUDE.md §5.2, Reverb Time and
- * Mod's 2x2 Chorus Pre Delay, the two parameters whose step needed
- * [FractionalLevelScale][dev.alonx3.ktnacontrol.protocol.FractionalLevelScale].
- *
- * The slider itself still drags continuously in `Float`; quantising to the amp's actual 0.5/0.1
- * step happens once, in `scale.toRaw`, same as every other control — the UI never rounds on its
- * own.
- */
-@Composable
-internal fun FractionalLevelControl(
-    label: String,
-    level: Double?,
-    enabled: Boolean,
-    onLevelChanged: (Double) -> Unit,
-    onRead: () -> Unit,
-    valueRange: ClosedFloatingPointRange<Float>,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium)
-            if (LocalReadButtonsVisible.current) TextButton(onClick = onRead, enabled = enabled) {
-                Text(stringResource(R.string.debug_connection_read_level))
-            }
-        }
-        Slider(
-            value = (level ?: 0.0).toFloat(),
-            onValueChange = { value -> onLevelChanged(value.toDouble()) },
-            valueRange = valueRange,
-            enabled = enabled && level != null,
-        )
-    }
-}
-
-/**
  * Una barra vertical por banda de frecuencia, al estilo del EQ gráfico de Boss Tone Studio.
  *
  * Sustituye a la lista de sliders horizontales sueltos que había antes: un ecualizador gráfico
@@ -331,8 +341,17 @@ internal fun FractionalLevelControl(
  * una al lado de otra en vertical. Con diez sliders horizontales apilados no hay curva que ver,
  * solo diez números.
  *
- * ⚠️ **Interfaz mínima y deliberadamente sin pulir**: el objetivo es que sea usable para probar
- * contra el amplificador, no que se parezca a BTS. El rediseño visual va aparte.
+ * ⚠️ **Ya no lleva botón de "leer" dentro de la celda** (2026-09-10). El GET dejó de ser por
+ * parámetro: hay **uno solo por pantalla**, arriba del todo, que relee el estado entero del
+ * amplificador. El detalle y el porqué, en CLAUDE.md §4.10 ("Un solo GET…").
+ *
+ * ⚠️ **Ya no es el widget mínimo con el que nació.** Se escribió como un rectángulo plano para
+ * poder probar el EQ contra el amplificador, con el rediseño visual aplazado a propósito; hoy es
+ * **el control continuo de toda la app** —las once tarjetas de efecto, las del panel sin perilla
+ * física y los seis niveles del panel—, así que el pase visual dejó de ser opcional. Lo que se le
+ * añadió, y el porqué de cada cosa, está comentado en el cuerpo: pista con extremos redondeados y
+ * filo propio, relleno en degradado, tapa de fader que marca el valor exacto, y una pastilla para
+ * el número que se tiñe con el acento mientras dura el arrastre.
  *
  * El valor es absoluto —se toca o se arrastra donde se quiere— porque en una barra corta eso es
  * más rápido que acumular desplazamiento, y porque el punto de partida (`null`, sin leer) no
@@ -346,62 +365,311 @@ internal fun VerticalBarControl(
     enabled: Boolean,
     onValueChanged: (Double) -> Unit,
     modifier: Modifier = Modifier,
-    barHeight: Dp = 96.dp,
+    barHeight: Dp = VERTICAL_BAR_HEIGHT,
+    /**
+     * El grosor de la pista.
+     *
+     * Parametrizado junto con [barHeight] para que **la tira del panel de amplificador pueda ser
+     * más grande sin arrastrar a las once tarjetas de efecto** (2026-09-10): allí son seis
+     * controles de tres en tres y hay sitio de sobra; en una tarjeta de efecto con 11 bandas de
+     * EQ, el mismo tamaño no cabría. Los valores por defecto son los de siempre, así que quien no
+     * pase nada no cambia.
+     */
+    barWidth: Dp = VERTICAL_BAR_WIDTH,
+    /**
+     * Lo que se enseña encima de la barra. Por defecto el número con un decimal; se pasa aparte
+     * cuando el valor es el **índice de un selector** y lo que hay que leer es su etiqueta
+     * (`1.60k`), la misma separación que ya hace [KnobControl] con su `valueText`.
+     */
+    valueText: String? = null,
 ) {
     val span = (range.endInclusive - range.start).takeIf { it > 0.0 } ?: 1.0
     var heightPx by remember { mutableFloatStateOf(0f) }
-    val track = MaterialTheme.colorScheme.surfaceVariant
-    val fill =
-        if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    var dragging by remember { mutableStateOf(false) }
+    val interaction = LocalKnobInteraction.current
+    val scheme = MaterialTheme.colorScheme
+
+    val ratio = value?.let { ((it - range.start) / span).toFloat().coerceIn(0f, 1f) }
+    val active = enabled && ratio != null
+    // El degradado va de un ámbar claro arriba al acento pleno abajo: es lo que hace que la
+    // columna se lea como iluminada en vez de como un rectángulo pintado. Los dos extremos salen
+    // del tema (`primary` y `onPrimaryContainer`, ambos claros sobre el grafito de la pista), así
+    // que el contraste del relleno contra su pista no baja del 3:1 que exige WCAG 1.4.11 para un
+    // objeto gráfico — que es justo lo que un degradado mal elegido rompería sin avisar.
+    val fillBrush = if (active) {
+        Brush.verticalGradient(
+            listOf(lerp(scheme.primary, scheme.onPrimaryContainer, 0.45f), scheme.primary),
+        )
+    } else {
+        Brush.verticalGradient(listOf(scheme.outline, scheme.outline))
+    }
+    val capColor = if (active) scheme.onPrimaryContainer else scheme.outline
+    val edge = if (dragging && enabled) scheme.primary else scheme.outlineVariant
 
     fun report(y: Float) {
         if (!enabled || heightPx <= 0f) return
         // Arriba es el máximo: se invierte la Y de la pantalla.
-        val ratio = (1f - (y / heightPx)).coerceIn(0f, 1f)
-        onValueChanged(range.start + ratio * span)
+        val position = (1f - (y / heightPx)).coerceIn(0f, 1f)
+        onValueChanged(range.start + position * span)
+    }
+
+    // Si la barra desaparece a media pulsación, el contenedor se quedaría congelado para
+    // siempre. Mismo seguro que [KnobControl].
+    DisposableEffect(Unit) {
+        onDispose { if (dragging) interaction.end() }
     }
 
     Column(
-        modifier = modifier.width(44.dp),
+        modifier = modifier.width(CONTROL_SLOT_WIDTH),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = value?.let { "%.1f".format(it) } ?: "—",
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-        )
+        // El valor va en una pastilla, no suelto: le da un ancho estable —así la tira no baila
+        // al pasar de "9" a "100"— y **se tiñe con el acento mientras se arrastra**, que es la
+        // única confirmación visual de que el gesto se cogió. Antes, con el número suelto, mover
+        // el dedo y no ver nada era indistinguible de que el pager se hubiera llevado el gesto.
         Box(
             modifier = Modifier
-                .padding(vertical = 4.dp)
-                .width(20.dp)
+                .clip(MaterialTheme.shapes.small)
+                .background(if (dragging && enabled) scheme.primary else scheme.surfaceVariant)
+                .padding(horizontal = Spacing.xs, vertical = 1.dp),
+        ) {
+            Text(
+                text = valueText ?: value?.let { "%.1f".format(it) } ?: "—",
+                style = MaterialTheme.typography.labelSmall,
+                color = when {
+                    dragging && enabled -> scheme.onPrimary
+                    enabled -> scheme.onSurface
+                    else -> scheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(vertical = Spacing.xs)
+                .width(barWidth)
                 .height(barHeight)
-                .background(track)
+                .clip(VERTICAL_BAR_SHAPE)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(VERTICAL_BAR_EDGE, edge, VERTICAL_BAR_SHAPE)
                 .onSizeChanged { heightPx = it.height.toFloat() }
                 .pointerInput(enabled) {
                     detectTapGestures { offset -> report(offset.y) }
                 }
+                // ⚠️ **El arrastre avisa a [KnobInteraction], y eso es lo que lo hace convivir
+                // con el paginado horizontal** (QA 2026-09-09, bloque C). Ver el KDoc de
+                // [PagedControls] para el razonamiento completo: el eje ortogonal resuelve quién
+                // gana el gesto, y esta bandera impide que una continuación diagonal pase la
+                // página a mitad de ajuste.
                 .pointerInput(enabled) {
-                    detectVerticalDragGestures { change, _ -> report(change.position.y) }
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            if (!enabled) return@detectVerticalDragGestures
+                            dragging = true
+                            interaction.begin()
+                        },
+                        onDragEnd = {
+                            dragging = false
+                            interaction.end()
+                        },
+                        onDragCancel = {
+                            dragging = false
+                            interaction.end()
+                        },
+                        onVerticalDrag = { change, _ -> report(change.position.y) },
+                    )
                 },
         ) {
-            val ratio = value?.let { ((it - range.start) / span).toFloat().coerceIn(0f, 1f) }
             if (ratio != null) {
                 Box(
                     modifier = Modifier
+                        // El milímetro de aire a los lados es lo que deja el filo de la pista
+                        // como un anillo completo: sin él, el relleno se come sus dos costados y
+                        // el aviso de "estoy arrastrando" solo se vería en el tramo vacío.
+                        .padding(horizontal = VERTICAL_BAR_EDGE)
                         .fillMaxWidth()
-                        .fillMaxHeight(ratio)
+                        // ⚠️ **Alto en dp calculado a mano, no `fillMaxHeight(ratio)`**: el
+                        // suelo de [VERTICAL_BAR_CAP] tiene que ganar, y una fracción de la
+                        // altura no lo permite. Ver el porqué del suelo justo abajo.
+                        .height((barHeight * ratio).coerceAtLeast(VERTICAL_BAR_CAP))
                         .align(Alignment.BottomCenter)
-                        .background(fill),
-                )
+                        .background(fillBrush),
+                ) {
+                    // La tapa del fader: la línea clara que marca **dónde está exactamente el
+                    // valor**. Con solo el degradado, el borde superior del relleno se difumina
+                    // contra la pista y a ojo se pierden los últimos pasos.
+                    //
+                    // ⚠️ Y por eso el relleno tiene un alto mínimo: con el valor al mínimo la
+                    // columna mediría cero y la tapa desaparecería, dejando una barra vacía
+                    // idéntica a la de un control **sin leer** (`value == null`). Son dos estados
+                    // muy distintos —"está en 0" contra "no sé cuánto vale"— y el suelo de 3 dp
+                    // es lo que los mantiene distinguibles.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(VERTICAL_BAR_CAP)
+                            .align(Alignment.TopCenter)
+                            .background(capColor),
+                    )
+                }
             }
         }
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
+
+/**
+ * **La tira de controles paginada**: el contenedor que faltaba (QA 2026-09-09, bloque C).
+ *
+ * Enseña [count] controles de [ControlPaging.columnsFor] en [ControlPaging.columnsFor], con
+ * paginado horizontal para llegar al resto. Es genérico sobre el widget —le da igual si dentro va
+ * un [VerticalBarControl] o un [KnobControl]— porque las dos formas conviven en la app y las dos
+ * necesitan lo mismo: caber en una tira y poder pasar de página.
+ *
+ * ## ⚠️ Cómo coexisten el paginado y el arrastre del control (la decisión que había que tomar)
+ *
+ * El precedente de este proyecto es explícito: el gesto de las perillas era inutilizable porque
+ * **cualquier arrastre que empiece sin más se lo lleva el contenedor**, y se arregló exigiendo una
+ * pulsación mantenida (`detectDragGesturesAfterLongPress`). Un paginado horizontal es el mismo
+ * tipo de contenedor, así que había que confirmar la combinación, no darla por buena.
+ *
+ * **Confirmado, y por dos mecanismos distintos que se refuerzan:**
+ *
+ * 1. **Los gestos están separados en el eje, y el del control además en el tiempo.**
+ *    - `KnobControl` arrastra **en horizontal, pero solo después de mantener**. El pager arranca
+ *      con un arrastre horizontal **inmediato**. O sea que no compiten por el mismo evento:
+ *      soltar y arrastrar pagina; mantener y arrastrar ajusta. La separación es temporal, que es
+ *      la más fuerte de las dos — no depende de qué dirección tome el dedo.
+ *    - `VerticalBarControl` arrastra **en vertical**. El pager, en horizontal. Compose resuelve
+ *      esto por *touch slop*: gana quien cruce primero el umbral **en su propio eje**, y quien
+ *      gana consume el puntero. Un gesto claramente vertical ajusta; uno claramente horizontal
+ *      pagina. Es el caso ortogonal estándar, no una carrera.
+ * 2. **Y por si el dedo va en diagonal, el pager se congela mientras se ajusta.** Es la parte que
+ *    el eje **no** resuelve, y es el mismo agujero que ya documentaba [KnobInteraction] para los
+ *    scrolls: reclamar el puntero impide que el contenedor *robe* el arrastre, pero el dedo sigue
+ *    apoyado encima y una desviación horizontal a mitad de ajuste pasaría de página con el
+ *    control a medio mover. `userScrollEnabled = !adjusting` lo cierra. Para que funcione,
+ *    [VerticalBarControl] tuvo que **empezar a avisar** a [KnobInteraction], cosa que antes no
+ *    hacía: era el único control con arrastre que no participaba.
+ *
+ * ⚠️ **Lo que esto no demuestra**: que se *sienta* bien. Que el umbral de la pulsación mantenida
+ * no moleste al pasar de página, o que la barra no se dispare con un roce, solo lo dice un dedo
+ * sobre el cristal (BACKLOG.md, "Pendiente por probar").
+ *
+ * ## Otras decisiones de esta pieza
+ *
+ * - **`BoxWithConstraints` y no un número fijo de columnas**: ver [ControlPaging].
+ * - **Los puntos de página solo aparecen con más de una página.** Un indicador de "página 1 de 1"
+ *   es ruido que además sugiere que hay algo más que no se ve.
+ * - **La última página se rellena con huecos.** Con 11 controles de 4 en 4, los 3 de la última se
+ *   repartirían el ancho entero y quedarían al triple de tamaño que los de las páginas anteriores
+ *   — la misma tira midiendo dos cosas distintas según dónde estés.
+ */
+@Composable
+internal fun PagedControls(
+    count: Int,
+    modifier: Modifier = Modifier,
+    slotWidth: Dp = CONTROL_SLOT_WIDTH,
+    /**
+     * Cuántos controles por página, **solo cuando el reparto significa algo**; null (lo normal)
+     * deja que salga del ancho. El criterio para saltarse la regla está en
+     * [ControlPaging.columnsFor].
+     */
+    columns: Int? = null,
+    item: @Composable (index: Int) -> Unit,
+) {
+    if (count <= 0) return
+    val interaction = LocalKnobInteraction.current
+
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val perPage = ControlPaging.columnsFor(
+            availableWidthDp = maxWidth.value.toInt(),
+            slotWidthDp = slotWidth.value.toInt(),
+            fixedColumns = columns,
+        )
+        val pages = ControlPaging.pageCount(count, perPage)
+        val state = rememberPagerState(pageCount = { pages })
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            HorizontalPager(
+                state = state,
+                // ⚠️ El punto 2 del razonamiento de arriba: mientras un control esté en ajuste,
+                // el pager no responde al dedo.
+                userScrollEnabled = !interaction.adjusting,
+                modifier = Modifier.fillMaxWidth(),
+            ) { page ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    val indices = ControlPaging.indicesOnPage(count, page, perPage)
+                    indices.forEach { index ->
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            item(index)
+                        }
+                    }
+                    // Huecos: mantienen el ancho de celda constante entre páginas.
+                    repeat(perPage - indices.count()) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+
+            if (pages > 1) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    repeat(pages) { index ->
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 3.dp)
+                                .size(PAGE_DOT_SIZE)
+                                .clip(CircleShape)
+                                .background(
+                                    if (index == state.currentPage) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outline
+                                    }
+                                ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * El ancho de una celda de la tira.
+ *
+ * Subido de los 44 dp que tenía [VerticalBarControl] suelto: la celda ahora carga también la
+ * etiqueta a dos líneas y, cuando lo tiene, el botón de leer. Con 80 dp entran tres en cualquier
+ * móvil (240 dp) y cuatro en uno normal.
+ */
+internal val CONTROL_SLOT_WIDTH = 80.dp
+
+private val VERTICAL_BAR_WIDTH = 24.dp
+private val VERTICAL_BAR_HEIGHT = 108.dp
+
+/** Los extremos redondeados de la pista, que es lo que la separa de un rectángulo plano. */
+private val VERTICAL_BAR_SHAPE = RoundedCornerShape(percent = 50)
+
+/** El filo de la pista: define el hueco sin pintarlo, y se enciende con el acento al arrastrar. */
+private val VERTICAL_BAR_EDGE = 1.dp
+
+/** La tapa del fader, y a la vez el alto mínimo del relleno. Ver el cuerpo del control. */
+private val VERTICAL_BAR_CAP = 3.dp
+private val PAGE_DOT_SIZE = 6.dp
 
 /**
  * Quién está ajustando una perilla ahora mismo, para que los contenedores con scroll se
@@ -454,17 +722,17 @@ internal val LocalKnobInteraction = staticCompositionLocalOf { KnobInteraction()
  * Existe como helper y no como llamada suelta en cada pantalla para que sea difícil olvidarlo:
  * un contenedor que se desplace durante el gesto arruina el ajuste, y el síntoma —"el valor
  * salta raro"— no señala al scroll.
+ *
+ * ⚠️ **Tenía un gemelo horizontal, borrado el 2026-09-09** (QA, bloque C). Sus dos usuarios eran
+ * las filas con scroll del EQ gráfico y del paramétrico, y las dos pasaron a [PagedControls]: un
+ * pager no es un scroll, así que lee `LocalKnobInteraction.adjusting` por su cuenta con
+ * `userScrollEnabled`. Se borra en vez de dejarse "por si acaso" porque un helper sin usuarios
+ * es una invitación a reintroducir el scroll libre que el paginado vino a sustituir.
  */
 @Composable
 internal fun Modifier.knobAwareVerticalScroll(
     state: ScrollState = rememberScrollState(),
 ): Modifier = verticalScroll(state, enabled = !LocalKnobInteraction.current.adjusting)
-
-/** El gemelo horizontal de [knobAwareVerticalScroll]. */
-@Composable
-internal fun Modifier.knobAwareHorizontalScroll(
-    state: ScrollState = rememberScrollState(),
-): Modifier = horizontalScroll(state, enabled = !LocalKnobInteraction.current.adjusting)
 
 /**
  * Una perilla con gesto **mantener + arrastrar en horizontal**. El componente de perilla del
@@ -721,3 +989,104 @@ private const val KNOB_START_DEGREES = 135.0
 
 /** Cuánto barre: 270°, dejando el hueco de abajo como en una perilla real. */
 private const val KNOB_SWEEP_DEGREES = 270.0
+
+/**
+ * Un parámetro continuo listo para pintarse en una tira vertical (QA 2026-09-09, bloque C).
+ *
+ * Es el vocabulario que hace que la conversión de las tarjetas sea **una lista y no un rediseño
+ * por tarjeta**: cada bloque —Booster, Delay, Reverb, Noise Gate, Contour, los 31 tipos de
+ * Mod/FX— construye su `List<VerticalParam>` con los datos que ya tenía, y [PagedVerticalParams]
+ * se encarga de repartirlos en páginas. Sin esto, cada tarjeta tendría su propia versión del
+ * mismo `Row` con su propio reparto, que es exactamente lo que la evaluación descartó.
+ *
+ * @param value en unidades de **presentación**, no el byte crudo — igual que `displayValue` en
+ *   `device/`. Null es "el amplificador todavía no lo dijo", y el control se pinta vacío en vez
+ *   de en cero (un cero inventado se mandaría al amp al primer toque).
+ * @param valueText qué se lee encima de la barra; null usa el número con un decimal.
+ */
+internal data class VerticalParam(
+    val label: String,
+    val value: Double?,
+    val range: ClosedRange<Double>,
+    val onValueChanged: (Double) -> Unit,
+    val valueText: String? = null,
+)
+
+/**
+ * La tira paginada de [VerticalParam], que es como se pintan los parámetros continuos de todas
+ * las tarjetas desde el 2026-09-09.
+ *
+ * Es [PagedControls] con [VerticalBarControl] dentro; existe como composable propio para que las
+ * tarjetas pasen una lista de datos y no un lambda de composición. Ver [PagedControls] para la
+ * decisión sobre cómo conviven el paginado y el arrastre.
+ */
+@Composable
+internal fun PagedVerticalParams(
+    params: List<VerticalParam>,
+    canEdit: Boolean,
+    modifier: Modifier = Modifier,
+    /** Ver [PagedControls]: null —lo normal— deriva las columnas del ancho. */
+    columns: Int? = null,
+    barHeight: Dp = VERTICAL_BAR_HEIGHT,
+    barWidth: Dp = VERTICAL_BAR_WIDTH,
+) {
+    if (params.isEmpty()) return
+    PagedControls(
+        count = params.size,
+        modifier = modifier.padding(vertical = Spacing.xs),
+        columns = columns,
+    ) { index ->
+        val param = params[index]
+        VerticalBarControl(
+            label = param.label,
+            value = param.value,
+            valueText = param.valueText,
+            range = param.range,
+            enabled = canEdit,
+            onValueChanged = param.onValueChanged,
+            barHeight = barHeight,
+            barWidth = barWidth,
+        )
+    }
+}
+
+/**
+ * El encabezado de una tarjeta de bloque: el nombre a la izquierda y, si el bloque tiene uno, su
+ * interruptor a la derecha (QA 2026-09-09, bloque C — pase visual).
+ *
+ * ⚠️ **Es la misma forma que ya tenía `EffectCard`**, extraída para que las tarjetas del panel
+ * —Noise Gate, Contour, EQ1, EQ2, cadena— dejen de ser cada una un poco distinta. Antes el Noise
+ * Gate no tenía título y se identificaba por la etiqueta de su propio interruptor: una tarjeta
+ * que empieza con un switch se lee como un ajuste suelto, no como un bloque.
+ *
+ * Poner el interruptor **en el encabezado** y no como una fila más es lo que quita la
+ * duplicación: sin esto, la tarjeta decía "Noise Gate" en el título y otra vez en el switch.
+ */
+@Composable
+internal fun BlockHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    checked: Boolean? = null,
+    enabled: Boolean = true,
+    onCheckedChange: ((Boolean) -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title.uppercase(java.util.Locale.ROOT),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        if (checked != null && onCheckedChange != null) {
+            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        }
+    }
+}
+
+/** Los colores y el relleno que comparten todas las tarjetas de bloque. Ver [BlockHeader]. */
+@Composable
+internal fun blockCardColors() = androidx.compose.material3.CardDefaults.cardColors(
+    containerColor = MaterialTheme.colorScheme.surface,
+)

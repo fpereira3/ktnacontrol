@@ -7,4 +7,10 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!--
+      El fondo del chasis, para el `windowBackground` del tema de la plataforma. Es el único sitio
+      donde un color vive fuera de `ui/theme/Color.kt`, y no hay alternativa: un `<style>` de XML
+      no puede leer un `Color` de Kotlin. Debe seguir valiendo lo mismo que `ChassisBackground`.
+    -->
+    <color name="chassis_background">#FF0E0F11</color>
 </resources>

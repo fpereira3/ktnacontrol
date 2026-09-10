@@ -128,6 +128,111 @@ enum class AmpCategory(
 }
 
 /**
+ * **El mapeo bidireccional canal base ↔ `Var [canal]`, en un solo sitio y probado** (QA
+ * 2026-09-09, bloque A.1).
+ *
+ * Existe porque la misma pregunta —"¿en qué canal estoy y está la variación puesta?"— se estaba
+ * respondiendo de **tres formas distintas** repartidas por la UI, y las tres discrepaban:
+ *
+ * | Quién | Qué miraba | Consecuencia |
+ * | --- | --- | --- |
+ * | `AmpSection`, para pintar el switch | [KatanaAddresses.AMP_VARIATION] (`06 5C`) | el LED, que **es de solo lectura** |
+ * | `ampVariationApplies`, para habilitarlo | el modelo (`00 21`) | se apagaba con cualquier "sneaky amp" activo |
+ * | `onAmpVariationChanged`, para escribir | la perilla de panel (`06 50`) | podía escribir el canal de otra categoría |
+ *
+ * ⚠️ **De ahí salían los dos síntomas del reporte de QA**, y conviene entender el mecanismo
+ * porque los dos parecían "el switch está roto" y no lo estaban:
+ *
+ *  1. **"En Acoustic/Clean/Lead/Brown el switch sale bloqueado."** No era de esos cuatro canales:
+ *     era de que el modelo activo fuera un *sneaky amp* (`Pro Crunch`, `VO Lead`, …), que no
+ *     tiene gemelo `Var [...]` y dejaba [AmpType.category] en null. Crunch "funcionaba" solo
+ *     porque ahí el modelo era el `[CRUNCH]` pelado. Lo arregla [categoryOf], que cae a la
+ *     **perilla del panel** cuando el modelo no basta: la perilla siempre está en una de las
+ *     cinco posiciones, así que la variación siempre tiene a qué referirse.
+ *  2. **"Una vez activada, no hay forma de volver al modelo base."** El camino de apagado
+ *     existía; lo que no llegaba era el gesto. El switch se pintaba desde `06 5C`, que solo
+ *     reporta el **botón físico**: al cambiar la variación escribiendo el modelo, ese LED no
+ *     tiene por qué moverse, así que el switch se quedaba visualmente en OFF y el siguiente
+ *     toque volvía a mandar `onCheckedChange(true)` — otra vez encender. Lo arregla [isOn],
+ *     que deriva el estado **del modelo**, que es justo lo que la app acaba de escribir.
+ *
+ * ✅ **La tabla de los diez valores no cambió y no hacía falta**: `midi.xml:37311-37341` da los
+ * cinco `[CANAL]` y los cinco `Var [Canal]` exactamente como ya estaban en [AmpCategory]. Lo que
+ * estaba mal era quién preguntaba qué, no el dato.
+ */
+object AmpVariation {
+
+    /**
+     * En qué canal está el amplificador, para lo que a la variación respecta.
+     *
+     * Mira **primero el modelo** y solo si ese no lo dice cae a la perilla del panel:
+     *
+     *  - Con `[CRUNCH]` o `Var [Crunch]` activo, el modelo ya identifica el canal sin ambigüedad.
+     *  - Con un *sneaky amp* activo (`Pro Crunch`, `MS-1959 I`, …) el modelo no pertenece a
+     *    ninguna pareja, y entonces manda [KatanaAddresses.AMP_TYPE_PANEL] (`06 50`), que
+     *    reporta la posición física de la perilla — confirmada contra el amplificador como parte
+     *    del bloque `06 5x`, el que acertó once de once (CLAUDE.md §5).
+     *
+     * ⚠️ **El orden importa y es deliberado.** Al revés —panel primero— la app perdería el canal
+     * correcto justo cuando el modelo sí lo sabe, porque `06 50` no tiene por qué haberse leído
+     * todavía en el momento en que el dump ya trajo `00 21`.
+     *
+     * @return null solo si **ninguna** de las dos direcciones se ha leído aún.
+     */
+    fun categoryOf(model: Int?, panelCategory: Int?): AmpCategory? =
+        model?.let(AmpType::fromValue)?.category
+            ?: panelCategory?.let(AmpCategory::fromValue)
+
+    /**
+     * Si la variación está puesta ahora mismo, **leído del modelo** y no del LED `06 5C`.
+     *
+     * @return true con uno de los cinco `Var [...]`, false con uno de los cinco canales base, y
+     *   **null cuando el modelo no es ninguno de los diez** — un *sneaky amp*, o nada leído aún.
+     *   Null no es "apagado": es "esta pregunta no tiene respuesta con este modelo", y quien
+     *   pinta el switch decide qué enseñar (hoy, apagado; ver [AmpVariationUi]).
+     */
+    fun isOn(model: Int?): Boolean? =
+        model?.let(AmpType::fromValue)?.takeIf { it.category != null }?.isVariation
+
+    /**
+     * **El modelo que hay que escribir en [KatanaAddresses.AMP_TYPE_FULL]** para poner la
+     * variación en [on], o null si no se sabe en qué canal está el amplificador.
+     *
+     * Es el camino completo en las dos direcciones —encender escribe el `Var [...]`, apagar
+     * escribe el canal base—, que es la mitad que faltaba: antes solo existía el de encender.
+     *
+     * ⚠️ **Con un sneaky amp activo esto lo sustituye por el canal de su perilla**, y eso es un
+     * cambio de sonido real: pasar de `Pro Crunch` a `[CRUNCH]` o a `Var [Crunch]`. Es lo mismo
+     * que hace el botón VARIATION del panel —la variación es una propiedad de la posición de la
+     * perilla, no del modelo suelto— pero conviene que esté escrito: la alternativa era dejar el
+     * switch muerto en cuanto hubiera un sneaky amp, que es justo el bug que se está arreglando.
+     */
+    fun modelFor(model: Int?, panelCategory: Int?, on: Boolean): Int? =
+        categoryOf(model, panelCategory)?.typeValue(on)
+}
+
+/**
+ * Lo que la UI necesita saber del switch de variación, resuelto de una vez.
+ *
+ * Un solo tipo en vez de dos `StateFlow` sueltos porque las dos preguntas —"¿se puede tocar?" y
+ * "¿está encendido?"— salen del mismo par de direcciones y separarlas fue precisamente lo que
+ * dejó que se contestaran con fuentes distintas.
+ */
+data class AmpVariationUi(
+    /** Si el switch tiene a qué referirse: hay canal conocido, por modelo o por perilla. */
+    val applies: Boolean,
+    /** Si se pinta encendido. Un modelo sin pareja se enseña apagado, no indeterminado. */
+    val on: Boolean,
+) {
+    companion object {
+        fun of(model: Int?, panelCategory: Int?): AmpVariationUi = AmpVariationUi(
+            applies = AmpVariation.categoryOf(model, panelCategory) != null,
+            on = AmpVariation.isOn(model) == true,
+        )
+    }
+}
+
+/**
  * The green / red / yellow bank each effect keeps, selected by the button under its knob.
  *
  * `midi.xml` calls these addresses "GRY color select" — GRY spelling out the three colours —

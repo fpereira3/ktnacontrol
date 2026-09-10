@@ -18,34 +18,37 @@ import org.junit.Test
 class ChainDiagramTest {
 
     @Test
-    fun `los ocho bloques del vocabulario mapean a los identificadores que dicen las fuentes`() {
+    fun `los siete bloques del vocabulario mapean a los identificadores que dicen las fuentes`() {
         // ✅ Confirmado en `FxFloorboard/summaryDialog.cpp:89-105`, que hace este mismo trabajo,
         // y `stompBox.cpp:827` para CH_A.
         assertEquals(ChainDiagramBlock.BOOSTER, ChainBlock.OD.diagramBlock)
         assertEquals(ChainDiagramBlock.MOD, ChainBlock.FX1.diagramBlock)
         assertEquals(ChainDiagramBlock.FX, ChainBlock.FX2.diagramBlock)
         assertEquals(ChainDiagramBlock.AMP, ChainBlock.CH_A.diagramBlock)
-        assertEquals(ChainDiagramBlock.FXLOOP, ChainBlock.LP.diagramBlock)
         assertEquals(ChainDiagramBlock.DELAY, ChainBlock.DD1.diagramBlock)
         assertEquals(ChainDiagramBlock.DELAY2, ChainBlock.DD2.diagramBlock)
         assertEquals(ChainDiagramBlock.REVERB, ChainBlock.RV.diagramBlock)
     }
 
     @Test
-    fun `los doce identificadores restantes no se dibujan`() {
+    fun `los trece identificadores restantes no se dibujan`() {
         val omitidos = listOf(
-            ChainBlock.CS, ChainBlock.CH_B, ChainBlock.EQ1, ChainBlock.EQ2,
+            ChainBlock.CS, ChainBlock.LP, ChainBlock.CH_B, ChainBlock.EQ1, ChainBlock.EQ2,
             ChainBlock.PDL, ChainBlock.FV, ChainBlock.NS_1, ChainBlock.NS_2,
             ChainBlock.USB, ChainBlock.CN_S, ChainBlock.CAB, ChainBlock.CN_M,
         )
         omitidos.forEach { block ->
             assertNull("${block.displayName} no debería dibujarse", block.diagramBlock)
         }
-        // Los 20 son 8 dibujados + 12 omitidos: si alguien añade un identificador nuevo sin
+        // ⚠️ **`LP` pasó de dibujado a omitido el 2026-09-09** (QA, A.2). El oráculo es ahora
+        // Boss Tone Studio, que no enseña el send/return en su cadena de señal: mientras se
+        // dibujaba, ninguna de las siete cadenas de fábrica coincidía con el editor oficial.
+        // Es un punto de inserción con su propio selector (`06 21`), no un bloque de tono.
+        // Los 20 son 7 dibujados + 13 omitidos: si alguien añade un identificador nuevo sin
         // decidir de qué lado cae, esto lo caza.
         assertEquals(ChainBlock.SLOT_COUNT, ChainBlock.entries.size)
-        assertEquals(8, ChainBlock.entries.count { it.diagramBlock != null })
-        assertEquals(12, omitidos.size)
+        assertEquals(7, ChainBlock.entries.count { it.diagramBlock != null })
+        assertEquals(13, omitidos.size)
     }
 
     @Test
@@ -69,8 +72,11 @@ class ChainDiagramTest {
      * El orden crudo es
      * `PDL → OD → FX1 → FX2 → EQ1 → EQ2 → CH_A → CS → NS_1 → FV → LP → DD1 → CN_S → DD2 → RV →
      * CAB → CH_B → NS_2 → USB → CN_M`, y lo que queda al filtrar tiene sentido musical: booster
-     * antes del previo, loop y delays después, reverb al final. Que salga algo coherente es la
-     * mejor señal disponible de que el mapeo no está cruzado.
+     * antes del previo, delays después, reverb al final.
+     *
+     * ✅ Y ahora se puede decir algo más fuerte que "tiene sentido": es **exactamente
+     * [ChainPreset.CHAIN_3_1]**, una de las siete de fábrica, comprobado en `ChainPresetTest`
+     * contra Boss Tone Studio.
      */
     @Test
     fun `la cadena del fichero de referencia filtra a una secuencia con sentido`() {
@@ -87,7 +93,6 @@ class ChainDiagramTest {
                 ChainDiagramBlock.MOD,
                 ChainDiagramBlock.FX,
                 ChainDiagramBlock.AMP,
-                ChainDiagramBlock.FXLOOP,
                 ChainDiagramBlock.DELAY,
                 ChainDiagramBlock.DELAY2,
                 ChainDiagramBlock.REVERB,
@@ -98,10 +103,10 @@ class ChainDiagramTest {
 
     @Test
     fun `el filtro conserva el orden y no lo reordena`() {
-        // Los mismos ocho al revés deben salir al revés: el diagrama refleja el amplificador,
+        // Los mismos siete al revés deben salir al revés: el diagrama refleja el amplificador,
         // no un orden canónico inventado por la app.
         val alReves = listOf(
-            ChainBlock.RV, ChainBlock.DD2, ChainBlock.DD1, ChainBlock.LP,
+            ChainBlock.RV, ChainBlock.DD2, ChainBlock.DD1,
             ChainBlock.CH_A, ChainBlock.FX2, ChainBlock.FX1, ChainBlock.OD,
         ).map { it.value as Int? }
 
@@ -110,7 +115,6 @@ class ChainDiagramTest {
                 ChainDiagramBlock.REVERB,
                 ChainDiagramBlock.DELAY2,
                 ChainDiagramBlock.DELAY,
-                ChainDiagramBlock.FXLOOP,
                 ChainDiagramBlock.AMP,
                 ChainDiagramBlock.FX,
                 ChainDiagramBlock.MOD,
@@ -135,6 +139,37 @@ class ChainDiagramTest {
         assertEquals(
             listOf(ChainDiagramBlock.BOOSTER),
             ChainBlock.diagramSequence(listOf(0x7F, ChainBlock.OD.value)),
+        )
+    }
+
+    @Test
+    fun `nada de lo que este despues del cabinet se dibuja`() {
+        // ⚠️ El bug reportado en QA (A.2): "un bloque después de SPEAKER es imposible". El
+        // diagrama sustituye CAB por un SPEAKER fijo al final, así que un bloque colocado tras
+        // el cabinet se dibujaba **antes** de ese SPEAKER — afirmando lo contrario de lo que
+        // dice el amplificador. Con las siete cadenas de fábrica no se veía, porque después de
+        // CAB solo quedan bloques que no se dibujan; era cierto por casualidad.
+        val conAlgoDetras = listOf(
+            ChainBlock.OD, ChainBlock.CH_A, ChainBlock.RV,
+            ChainBlock.CAB,
+            ChainBlock.DD1, ChainBlock.DD2,
+        ).map { it.value as Int? }
+
+        assertEquals(
+            listOf(
+                ChainDiagramBlock.BOOSTER,
+                ChainDiagramBlock.AMP,
+                ChainDiagramBlock.REVERB,
+            ),
+            ChainBlock.diagramSequence(conAlgoDetras),
+        )
+    }
+
+    @Test
+    fun `sin cabinet en la lista no se corta nada`() {
+        assertEquals(
+            listOf(ChainDiagramBlock.BOOSTER, ChainDiagramBlock.REVERB),
+            ChainBlock.diagramSequence(listOf(ChainBlock.OD.value, ChainBlock.RV.value)),
         )
     }
 }

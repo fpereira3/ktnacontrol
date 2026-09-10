@@ -110,4 +110,52 @@ class AmpDomainTest {
     fun `los tres parametros sin perilla fisica son del amplificador`() {
         assertEquals(NoPanelParamId.entries.size, AmpDomain.NO_PANEL_PARAMS.size)
     }
+
+    @Test
+    fun `Solo pertenece a los efectos, no al amplificador`() {
+        // ⚠️ QA 2026-09-09, bloque C: Solo pasó de la pantalla de amplificador a ser la sexta
+        // tarjeta de `EffectsSection`, después de Reverb. El reparto es dato, no "donde quedó
+        // en el árbol de Compose", así que el cambio se fija aquí — si alguien lo devolviera a
+        // `AmpDomain.SELECTORS` sin querer, esto lo caza en vez de que aparezca dos veces.
+        assertEquals(ControlDomain.EFFECT, AmpDomain.domainOf(SelectorId.AMP_SOLO))
+        assertTrue(SelectorId.AMP_SOLO in AmpDomain.EFFECT_SELECTORS)
+        assertTrue(SelectorId.AMP_SOLO !in AmpDomain.SELECTORS)
+    }
+
+    @Test
+    fun `Solo no es uno de los cinco efectos del panel`() {
+        // Y no se cuela en `EffectId`: no tiene slot de color ni catálogo de tipos, así que es
+        // una tarjeta aparte y no una entrada más del bucle. Ver `SoloCard` en EffectsScreen.
+        assertEquals(5, EffectId.entries.size)
+        assertTrue(EffectId.entries.none { it.name.contains("SOLO") })
+    }
+
+    // --- El orden de pintado del panel -------------------------------------------------------
+
+    @Test
+    fun `el orden del panel es una permutacion exacta de los niveles del amplificador`() {
+        // El `init` de AmpDomain ya lo exige, pero eso solo salta si alguien carga la clase; este
+        // test lo hace fallar en CI aunque nadie abra la pantalla.
+        assertEquals(AmpDomain.LEVELS.toSet(), AmpDomain.PANEL_LEVEL_ORDER.toSet())
+        assertEquals(AmpDomain.LEVELS.size, AmpDomain.PANEL_LEVEL_ORDER.size)
+        assertEquals(
+            "sin repetidos",
+            AmpDomain.PANEL_LEVEL_ORDER.size,
+            AmpDomain.PANEL_LEVEL_ORDER.distinct().size,
+        )
+    }
+
+    @Test
+    fun `cada pagina del panel es un grupo que se ajusta junto`() {
+        // Lo que fija este test no es el orden por gusto, es que las dos tríadas no se partan:
+        // la ecualización primero, el nivel y el brillo después. Si alguien reordena, esto avisa.
+        assertEquals(
+            listOf(LevelId.BASS, LevelId.MIDDLE, LevelId.TREBLE),
+            AmpDomain.PANEL_LEVEL_ORDER.take(3),
+        )
+        assertEquals(
+            listOf(LevelId.GAIN, LevelId.VOLUME, LevelId.PRESENCE),
+            AmpDomain.PANEL_LEVEL_ORDER.drop(3),
+        )
+    }
 }

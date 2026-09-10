@@ -51,6 +51,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Los `.tsl` importados, del más reciente al más antiguo. */
     val entries: StateFlow<List<LibraryEntry>> = _entries.asStateFlow()
 
+    /**
+     * Sigue en `true` hasta que la primera lectura de disco termina.
+     *
+     * ⚠️ **Sin esto no había forma de distinguir** "todavía no leí nada" de "leí y no hay nada":
+     * las dos dejaban `entries` vacío. Ver [libraryListStateOf] (CLAUDE.md §4.7, Fase 4), que es
+     * quien decide qué enseñar a partir de esto y de [entries] — la Composable no mira `loading`
+     * a pelo.
+     */
+    private val _loading = MutableStateFlow(true)
+    val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
     private val _opened = MutableStateFlow<OpenedPreset?>(null)
 
     /** El preset que se está mirando, o null si se está en la lista. */
@@ -71,7 +82,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refresh() {
-        viewModelScope.launch { _entries.value = library.list() }
+        viewModelScope.launch {
+            _entries.value = library.list()
+            _loading.value = false
+        }
     }
 
     /**

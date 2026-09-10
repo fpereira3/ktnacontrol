@@ -1791,6 +1791,273 @@ seguimiento, no repite lo que ya está ahí.
     (**15 warnings, el mismo baseline**, sin recursos huérfanos: el string del hamburguesa se fue
     con el menú) limpios.
 
+- **2026-09-09 — Fase 3 de la UI: sistema de diseño propio, aplicado a las tres pantallas, más
+  ícono y nombre.** **Implementado y pendiente de mirarlo en el teléfono** — es una fase visual, y
+  lo visual no lo confirma ni un test ni un `@Preview` (ver "Pendiente por probar", punto 19).
+  - **La dirección se eligió y se documentó antes de escribir una línea** (CLAUDE.md §4.6):
+    **Opción A, chasis oscuro con un solo acento ámbar**. ⚠️ **Y no ganó por gusto**: los tres
+    colores de slot de efecto son un hecho del dispositivo, y sobre una paleta Material sembrada
+    con ámbar (Opción B) **un punto amarillo sobre una superficie ámbar deja de ser un punto
+    amarillo**. Grafito neutro es el único fondo que no compite con verde/rojo/amarillo.
+  - ⚠️ **Antes de esta fase la app no tenía tema.** `Color.kt` seguía siendo la plantilla de
+    Android Studio (`Purple80`/`Pink40`) y encima `dynamicColor = true`: en el teléfono de pruebas
+    (API ≥ 31) **la paleta salía del fondo de pantalla**, y la del proyecto no se usaba nunca.
+  - **Tres decisiones que quitan opciones a propósito**, todas en CLAUDE.md §4.6:
+    - **`KTNAControlTheme` pierde `darkTheme`**: la app es siempre oscura. Los colores de slot se
+      afinaron contra grafito; una versión clara pediría un segundo juego afinado aparte.
+    - **`dynamicColor` se retira entero, no se pone en `false`**: dejar el parámetro deja la vía
+      para que el wallpaper vuelva a decidir la paleta.
+    - **`themes.xml` deja de heredar de `…Material.Light.NoActionBar`**, que pintaba **la ventana
+      en blanco antes de que Compose arrancara** — un fogonazo en cada apertura.
+  - ✅ **Los colores de efecto: la duda se cerró sin amplificador, y `midi.xml` se contradice a sí
+    mismo.** Dice `00` = RED en dos sitios (`:43961` y el bloque de conversión `:50863`) y a la vez
+    etiqueta el primer slot de tipo (`06 24`) como **GREEN** (`:43567`). El desempate salió de
+    `default_mk2.tsl`: los cinco efectos tienen color `00` y en los cinco **el tipo activo coincide
+    con el del primer slot** (`0A`/`1D`/`15`/`00`/`04`), con los otros dos slots en valores
+    distintos — **5 de 5**. Más `Adresses.txt:72-74` (`[0A|0B|0E]` = verde/rojo/amarillo) y
+    `color_assign.json` (`[0,1,2]` → green/red/yellow). **`EffectColor` ya era correcto**
+    (`GREEN(0x00)`); lo que cambia es que ahora está justificado en vez de heredado.
+  - **`EffectCard` se tiñe por su slot activo**: franja de 4 dp en el borde izquierdo + punto junto
+    al nombre. ⚠️ **El tinte nunca es la única pista** — el selector de debajo sigue diciendo
+    «Verde/Rojo/Amarillo» con palabras, y eso es lo que hace que el parecido entre el ámbar del
+    acento y el amarillo del slot no llegue a importar. Un valor desconocido (o `null`, que es el
+    caso normal antes del primer dump) cae en gris de borde: **no se adivina un color**.
+  - ⚠️ **La franja va con `drawBehind`, no con un `Box` de altura intrínseca**: dentro de la
+    tarjeta hay `FlowRow` y sliders, y pedirles medidas intrínsecas es de las cosas que revientan
+    en tiempo de ejecución y no al compilar.
+  - **Fuente única de verdad, en tres ficheros**: `Color.kt` (paleta entera, y ya no había ni un
+    `Color(0x…)` en `ui/screens/`), `Type.kt` (la escala completa; antes solo estaba `bodyLarge` y
+    los otros catorce eran los de Material sin que nadie los hubiera mirado) y **`Spacing.kt`,
+    nuevo**. ⚠️ **`Spacing` no se propagó a los ~108 literales `.dp` del proyecto y es decisión**:
+    la mayoría son **tamaños de componente** (el diámetro de una perilla, la altura de una barra de
+    EQ), que no son espaciado y no pertenecen a esa escala. Se aplicó donde esta fase tocaba.
+  - ✅ **Ícono vectorial propio**, dibujado a mano: una perilla con un arco de **270° empezando en
+    135°**, que es **exactamente el recorrido que dibuja `KnobDial`** dentro de la app. Con capa
+    monocroma aparte —la de delante no vale, el sistema la reteñiría entera y el cuerpo gris taparía
+    el arco—. ⚠️ **Ni un byte de `reference/`**, según la instrucción explícita: los colores no son
+    un problema, cualquier asset visual sí.
+  - ✅ **El nombre se queda en «KTNA Control»**. Se consideró «Katana Control», que se lee mejor, y
+    se descarta: **Katana es marca de Boss** y esta app no es oficial. La abreviatura es
+    deliberada.
+  - **Ni un test tocado, y aquí era el criterio de la tarea**: `./gradlew :app:testDebugUnitTest`
+    **433/433**, el mismo número que dejó la Fase 2; `git diff --stat -- app/src/test` sigue vacío.
+    `:app:assembleDebug` y `:app:lintDebug` limpios, **15 warnings con exactamente el mismo
+    reparto** (8 UnusedResources, 3 NewerVersionAvailable, 2 AndroidGradlePluginVersion, 1
+    RedundantLabel, 1 GradleDependency).
+  - **Instalado en el teléfono por adb inalámbrico** (`installDebug`, "Installed on 1 device").
+
+- **2026-09-09 — Fase 4 de la UI: estados de la Biblioteca y consistencia de los tres diálogos
+  destructivos.** **Implementado y pendiente de probar** (dado por bueno con los 5 tests JVM
+  nuevos, la compilación y el arranque en el teléfono; el aspecto real hay que mirarlo).
+  - **La decisión chica se resolvió antes de tocar código** (CLAUDE.md §4.7): guardar en canal y
+    enviar al amplificador **son la misma pantalla escrita dos veces** —primer paso que junta
+    datos, segundo paso que solo confirma— así que ese segundo paso se extrae a
+    `DestructiveConfirmDialog` (`ui/screens/Controls.kt`) y los dos lo llaman. "Guardar"/"Guardar
+    como" **no** entra en la extracción: es de un solo paso porque no escribe en hardware sin
+    confirmación, y forzarlo a dos pasos habría sido añadirle un paso que hoy no tiene — cambiar
+    comportamiento a cambio de una consistencia que no hacía falta.
+  - ✅ **Homologación sin forzar la forma**: cuando "Guardar" va a sobrescribir un fichero
+    existente, su botón pasa a decir **"Sí, sobrescribir"** —el mismo patrón "Sí, `<verbo>`" que
+    ya usaban los otros dos— y su aviso lleva el mismo margen (`Spacing.xs`) y el mismo color
+    que ellos. Creando un preset nuevo se queda en "Guardar": no hay nada que pisar.
+  - ✅ **`LibraryListState` (`ui/screens/LibraryListState.kt`), Kotlin puro, con tests JVM**:
+    `Loading`/`Empty`/`Loaded`, decidido por `libraryListStateOf(loading, entries)`. Corrige un
+    fallo real —antes "todavía no leí nada" y "leí y no hay nada" se veían exactamente igual,
+    las dos con `entries.isEmpty()`—. `LibraryViewModel` gana `loading: StateFlow<Boolean>`,
+    `true` hasta que la primera lectura de disco (`refresh()` en `init`) termina.
+  - ⚠️ **`loading` solo gana mientras la lista está vacía**: una recarga en segundo plano (tras
+    importar, borrar o guardar) con entradas ya cargadas no hace parpadear la pantalla a
+    "Cargando…" — se queda con lo que ya tenía.
+  - ✅ **Un `.tsl` que no parsea**: ya estaba resuelto (`LibraryEntry.error`, listado con
+    `library_entry_unreadable`, sin descartarse); se confirma con un test que fija que
+    `libraryListStateOf` no filtra nada, ni legibles ni ilegibles.
+  - ✅ **Bloques `DISPUTED` en el editor, no solo en la revisión previa al envío**:
+    `session.source?.unavailable` se pinta con el mismo `UnavailableSection` que ya usaba la
+    vista de solo lectura, justo bajo el nombre del preset en `PresetEditorScreen`.
+  - **5 tests JVM nuevos (438 en total)**, en `LibraryListStateTest`: cargando+vacío es
+    `Loading`, sin cargar+vacío es `Empty`, con entradas es `Loaded` cargando o no, un fichero
+    roto sigue en `Loaded` con su motivo, y una lista mixta conserva el orden.
+    ✅ **Ningún test existente hizo falta tocarlo** — `PresetSendFlow`, `PresetEditor` y el
+    resto de la suite siguen igual; `git diff --stat -- app/src/test` solo tiene ficheros nuevos.
+  - `./gradlew :app:testDebugUnitTest` (438/438), `:app:assembleDebug` y `:app:lintDebug`
+    (**15 warnings, el mismo baseline**) limpios. Instalado y arrancado en el teléfono sin
+    excepciones en `logcat`.
+
+- **2026-09-09 — Fase 5 de la UI, la última: pase de accesibilidad y calidad mínima.**
+  **Implementado y pendiente de probar** (dado por bueno con los 13 tests JVM nuevos de
+  contraste, la compilación y la instalación en el teléfono; TalkBack y el tamaño de fuente del
+  sistema solo se confirman con un dispositivo real).
+  - ✅ **`contentDescription`: la auditoría (grep de `Icon(`/`IconButton(`/`Image(` en todo
+    `ui/`) confirmó que la app **no tiene ningún ícono** —consecuencia de la Fase 2, que evitó
+    `material-icons-core` (§4.2)— así que no había nada que describir. Lo único visual sin texto
+    propio, el punto de color de `EffectCard`, se marca explícitamente decorativo con
+    `Modifier.clearAndSetSemantics {}`: el nombre del efecto y el color ya están en texto al
+    lado. La franja de color no necesitó la misma marca — se pinta con `drawBehind`, nunca tuvo
+    nodo de semántica.
+  - ✅ **Contraste calculado, no estimado**: `contrastRatio` (`ui/theme/Contrast.kt`), Kotlin
+    puro con la fórmula real de WCAG 2, y `Color.hex` como único puente hacia `Color` de
+    Compose. Los once pares reales de la paleta cumplen su umbral (texto ≥ `4.5:1`, componente
+    no textual ≥ `3:1`); el más ajustado es el rojo de slot con `5.01:1`. **Ningún color de slot
+    se movió** — la decisión explícita de frenar y documentar un conflicto no hizo falta
+    tomarla, porque no hubo conflicto. Tabla completa con los once pares, en CLAUDE.md §4.9 y en
+    el KDoc de cabecera de `Color.kt`.
+  - ✅ **Área táctil**: los botones y la barra de navegación ya cumplen 48 dp por defecto de
+    Material 3 (comprobado que el proyecto nunca desactiva esa garantía). El único
+    `Modifier.clickable` hecho a mano —la fila de un preset en `LibraryEntryCard`— dependía de
+    un efecto lateral (el `TextButton` de al lado empujándola a 48 dp); ahora lleva
+    `Modifier.heightIn(min = 48.dp)` explícito.
+  - ✅ **Escala de fuente**: auditado `Type.kt` y el resto de `ui/` buscando `.dp` donde iría
+    `.sp` — no apareció ni un caso; todo lo que define tamaño de texto ya usaba `.sp` desde la
+    Fase 3.
+  - **13 tests JVM nuevos (451 en total)**, en `ContrastTest`: los dos casos de referencia del
+    propio estándar WCAG (blanco/negro = 21:1, un color contra sí mismo = 1:1) y los once pares
+    reales de la paleta pineados contra su umbral.
+    ✅ **Ningún test existente hizo falta tocarlo.**
+  - `./gradlew :app:testDebugUnitTest` (451/451), `:app:assembleDebug` y `:app:lintDebug`
+    (**15 warnings, el mismo baseline**) limpios. Instalado y arrancado en el teléfono sin
+    excepciones en `logcat`.
+  - **Con esto se cierran las cinco fases del plan de UI sin amplificador** (Fase 1 a Fase 5).
+    Lo que queda del bloque 6 es exclusivamente lo que necesita hardware — ver "Pendiente por
+    probar", puntos 16 a 21.
+
+- **2026-09-09** — **QA en el teléfono con el amplificador: bloques A y B cerrados, C a medias**
+  (CLAUDE.md §4.10). Primer reporte de QA sobre hardware real después de cerrar las cinco fases
+  de UI. **498 tests JVM, 0 fallos, lint limpio** — 47 nuevos sobre los 451 que había al empezar.
+  - **A.1 ✅ La variación funciona en los cinco canales y se puede apagar.** El fallo no era la
+    tabla de modelos —`midi.xml:37311-37341` siempre estuvo bien— sino que **la misma pregunta se
+    contestaba con tres fuentes distintas**: el switch se pintaba desde el LED `06 5C` (que es de
+    solo lectura, así que nunca se encendía y por eso no había camino de vuelta), "¿aplica?"
+    miraba el modelo (y se apagaba con cualquier *sneaky amp*, no "en cuatro canales") y la
+    escritura miraba la perilla. Ahora hay un solo sitio: `AmpVariation` + `AmpVariationUi` en
+    `protocol/`, Kotlin puro. **`AmpVariationTest` cubre los diez casos** (encender y apagar en
+    cada canal) más los dos síntomas como regresiones.
+  - **A.2 ✅ El diagrama de la cadena: los siete valores crudos, el bloque que sobraba y la
+    relectura.** Los valores de `06 20` **no estaban en ninguna fuente que el proyecto usara**
+    (`midi.xml` solo da `range 00/06/00/06`, sin nombres); salen de
+    `FxFloorboard/floorBoard.cpp:490-599` + `floorBoardDisplay.cpp:158-177`, ahora en
+    `ChainPreset`. **Cuadran con Boss Tone Studio bloque a bloque en las siete** una vez retirado
+    `FXLOOP` del vocabulario (es un punto de inserción con su propio selector, no un bloque de
+    tono — mientras se dibujaba, ninguna de las siete coincidía). `diagramSequence` además
+    **corta en `CAB`**: lo que el array pusiera tras el cabinet se dibujaba antes del `SPEAKER`
+    fijo, que afirma lo contrario de lo que dice el amplificador. Y el diagrama **vuelve a
+    leerse al cambiar de cadena** (`ReloadRequest.ChainChanged`, reusando el coordinador de §4.4).
+  - **A.3 ✅ La Biblioteca vuelve a ser alcanzable.** Estaba cableada y era una entrada primaria;
+    el fallo era de medición: `LibraryPane` recibía `Modifier.weight(1f)` bajo un bloque en vivo
+    sin tope ni scroll, y **un `weight` sin espacio sobrante mide cero**. Al no hacer scroll el
+    contenedor de fuera, no había forma de llegar a ella. Ahora el bloque en vivo se pinta dentro
+    de la columna de `LibraryPane` por una ranura `header`: un solo scroll, y empuja la lista en
+    vez de borrarla.
+  - **B.1 ✅ SOLO EQ localizado: `60 00 0F 10`–`0F 19`, diez parámetros, confianza `midi.xml` ×2**
+    (tabla de asignación `:3432-3441` **y** bloque `<Structure>` `:49929-50024`, de acuerdo en las
+    diez direcciones y el orden). Sin `DISPUTED`: no hay fuente que lo contradiga. De paso
+    **desglosa `UserPatch%Patch_Mk2V2`**, los 22 bytes del firmware 2 que estaban anotados sin
+    contenido = este SOLO EQ (10) + un SOLO DELAY (12, localizado, no extraído). En
+    `SoloEqParams`, con tests. ⚠️ **Deliberadamente sin registrar como control** — ver "Por
+    hacer".
+  - **C ✅ a medias, con permiso explícito del encargo.** Hecho: **Solo pasa a ser una tarjeta de
+    `EffectsScreen`** después de Reverb (opción B, con `AMP_SOLO` movido a
+    `AmpDomain.EFFECT_SELECTORS` y test que lo fija); **el selector de modelo pasa a dos páginas
+    deslizables** `AMP TYPE` / `SNEAKY AMPS` con `HorizontalPager` (sin dependencia nueva) y la
+    clasificación en `AmpModelPage`, Kotlin puro con 10 tests; **la barra de navegación** tiene
+    las tres entradas del mismo tamaño y con borde; **los títulos de sección van en mayúscula**.
+    ⏸️ Pendiente: el rediseño de sliders verticales con paginado — ver "Por hacer".
+
+- **2026-09-09** — **Sliders verticales con paginado por tarjeta: cerrado el bloque C del QA**
+  (CLAUDE.md §4.10, "Sliders verticales… cerrado"). **509 tests JVM, 0 fallos, lint limpio** — 11
+  nuevos de `ControlPagingTest` y **ningún test existente hizo falta tocarlo**.
+  - ✅ **La pieza que faltaba es `PagedControls`**, y la evaluación previa acertó: `VerticalBarControl`
+    y el gesto de `KnobControl` ya existían, faltaba el **contenedor**. La cadena queda
+    `ControlPaging` (puro, con tests) → `PagedControls` (el pager) → `VerticalParam` (el parámetro
+    como dato) → `PagedVerticalParams` (lo que usan las tarjetas). ⚠️ `VerticalParam` es lo que hizo
+    barata la conversión: cada bloque construye una `List` y **no sabe nada de páginas**, así que no
+    hubo quince copias del mismo `Row`.
+  - ✅ **Convertidas**: las seis tarjetas de efecto (Booster, Mod, FX, Delay, Reverb, Solo) y las
+    del panel que eran sliders (Noise Gate, Contour, EQ1 gráfico y paramétrico, los tres Contour de
+    slot). El nivel de cada efecto entra en la **misma tira** que sus parámetros internos.
+  - ✅ **Paginado y arrastre conviven, y está razonado, no supuesto** (la decisión que pedía el
+    encargo): la perilla exige mantener pulsado y el pager arranca con arrastre inmediato —separados
+    en el **tiempo**, no solo en el eje—; la barra arrastra en vertical y el pager en horizontal
+    —ortogonales—; y además `userScrollEnabled = !adjusting` congela el pager mientras se ajusta,
+    que es lo que el eje no resuelve. ⚠️ Para eso **`VerticalBarControl` tuvo que empezar a avisar a
+    `KnobInteraction`**: era el único control con arrastre que no participaba.
+  - ✅ **Los controles por página se derivan del ancho real** (3 a 6), no son un número fijo: con 4
+    fijos, un EQ de 11 bandas se pagina en 3 páginas *incluso en una pantalla donde caben todas*.
+  - ✅ **Pase visual** en el mismo pase: `BlockHeader` + `blockCardColors` unifican las tarjetas del
+    panel con las de efecto, con el interruptor **en el encabezado** (antes el Noise Gate decía su
+    nombre dos veces).
+  - ⚠️ **Borrados**: `FractionalLevelControl` y `knobAwareHorizontalScroll`, sin usuarios tras la
+    conversión. Un pager no es un scroll.
+
+- **2026-09-10** — **Los seis niveles del panel pasan a la tira vertical, y el control se
+  estiliza** (CLAUDE.md §4.10, "El remate: los niveles del panel…"). **509 tests JVM, 0 fallos,
+  lint sin novedades** — cero tests nuevos y **ningún test existente hizo falta tocarlo**, que es
+  lo esperable de un cambio que no añade lógica: la matemática del paginado ya estaba cubierta por
+  `ControlPagingTest` y esto solo la usa desde un sitio más.
+  - ⚠️ **El bloque C había dejado la pantalla de amplificador hablando dos idiomas.** Convirtió
+    las once tarjetas de efecto y las del panel sin perilla física, pero
+    Gain/Volume/Bass/Middle/Treble/Presence seguían siendo un `LevelRow` horizontal cada uno,
+    apilados — el **mismo tipo de parámetro** (nivel continuo 0..100) con dos formas distintas en
+    la misma pantalla, y en el editor offline igual. Ahora son un `PagedVerticalParams` más,
+    construido con `ampLevelParams` (`AmpScreen.kt`): seis niveles a cuatro columnas dan dos
+    páginas en un móvil normal y una sola en horizontal, porque el número sale del ancho.
+  - ⚠️ **`LevelRow` se borra**: era su único llamador. `LevelControl` (el slider horizontal) se
+    queda, con dos usuarios que **no son controles editables de panel** — el detalle de solo
+    lectura de un preset (`LibraryPane`) y la tarjeta de diagnóstico.
+  - ✅ **Pase visual sobre `VerticalBarControl`**, que nació como "interfaz mínima y sin pulir"
+    para probar el EQ y hoy es **el control continuo de toda la app**: pista con extremos
+    redondeados y filo propio, relleno en **degradado** (ámbar claro arriba → acento abajo, los
+    dos extremos del tema), **tapa de fader** que marca el valor exacto, y el número en una
+    **pastilla que se tiñe con el acento mientras dura el arrastre** — la única confirmación
+    visual de que el gesto se cogió y no se lo llevó el pager.
+  - ⚠️ **El alto mínimo del relleno (3 dp) no es cosmético**: sin él, un valor en 0 se pinta como
+    una barra vacía **idéntica a la de un control sin leer** (`value == null`), y son dos estados
+    muy distintos. Por lo mismo el relleno se calcula en dp a mano en vez de con
+    `fillMaxHeight(ratio)`, que no admite suelo.
+
+- **2026-09-10** — **El orden y el tamaño de la tira del panel, tras probarla en el teléfono**
+  (CLAUDE.md §4.10, "El orden de las dos páginas…"). **514 tests JVM, 0 fallos, lint sin
+  novedades** — 5 nuevos, ninguno existente tocado.
+  - ⚠️ **El orden heredado partía la ecualización entre dos páginas.** `AmpDomain.LEVELS` es una
+    derivada sobre `LevelId.entries`, así que su orden es el del **mapa de direcciones**
+    (`06 51`..`06 56`) y de tres en tres daba `Gain · Volume · Bass` + `Middle · Treble · Presence`.
+    Ahora hay un orden de pintado propio, `AmpDomain.PANEL_LEVEL_ORDER`:
+    **`BASS · MIDDLE · TREBLE`** y **`GAIN · VOLUME · PRESENCE`**, dos tríadas que se ajustan cada
+    una junta.
+  - ⚠️ **Es una lista a mano donde antes había una derivada, así que lleva red**: un `init` con
+    `require` de permutación exacta de `LEVELS` + dos tests. Reordenar dejándose un nivel fuera no
+    daría error por ningún lado — la pantalla pintaría cinco.
+  - ⚠️ **Esta tira fija las columnas en 3**, excepción explícita a la decisión 2 del bloque C
+    (`ControlPaging.columnsFor(fixedColumns = …)`). El criterio: se permite **solo cuando el
+    reparto en páginas significa algo**; en una pantalla ancha, derivar fundiría las dos tríadas en
+    una fila. Un test fija que `null` sigue siendo idéntico al comportamiento de antes, que es lo
+    que usan las once tarjetas de efecto.
+  - ✅ **Barra del panel a 176×34 dp** (contra 108×24 del resto): `VerticalBarControl` gana
+    `barWidth` junto a `barHeight`, **con los valores de siempre por defecto**, así que los efectos
+    no se mueven. Mismo estilo, solo más grande.
+
+- **2026-09-10** — **Un solo GET por pantalla, en vez de uno por parámetro** (CLAUDE.md §4.10,
+  "Un solo GET por pantalla…"). **514 tests JVM, 0 fallos, lint sin novedades** — ningún test tocado
+  (lo que se prueba en JVM es la lógica, y esto es cableado de UI).
+  - ✅ **Se van los catorce botones de "leer" por parámetro** y queda el global que ya existía,
+    ahora **arriba del todo** de las dos pantallas en vivo y a ancho completo, con la etiqueta
+    «Releer del amplificador».
+  - ⚠️ **No se pierde ninguna capacidad, y ese es el argumento**: el botón dispara
+    `loadFromDump()`, que relee el bloque entero y **además** hace el GET individual de respaldo
+    para lo que el dump no cubre (los Contour por slot). Un dump son ~275 ms; cincuenta GET en
+    serie, hasta 800 ms cada uno.
+  - ⚠️ **`LocalReadButtonsVisible` se borra: nunca tuvo `Provider`.** Se había escrito para
+    esconder esos botones en el editor offline y se quedó siempre en `true`, así que la Biblioteca
+    enseñaba botones de "leer del amplificador" cableados a `{}` — un gesto aceptado que no hacía
+    nada. Eso queda arreglado de paso.
+  - ⚠️ **También se retira el "leer" de la tarjeta de diagnóstico del Solo**, y no por descuido:
+    sus `ProbeRow` ya leen de vuelta por su cuenta (`WriteProbe.verdict`) y el nivel candidato está
+    dentro del dump. Los dos botones de prueba —lo que de verdad desempata las dos direcciones
+    candidatas (§5)— **siguen intactos**.
+  - **Borrado**: ~190 líneas de firmas, 13 funciones del `ViewModel`, el `CompositionLocal` y la
+    cadena `R.string.debug_connection_read_level`.
+  - ✅ **El botón solo existe donde hay amplificador**, sin condición nueva: vive en `AmpScreen` y
+    `EffectsScreen`, y el editor offline no las usa (usa las tres secciones sueltas, §4.2).
+
 ## En progreso
 
 
@@ -2425,6 +2692,142 @@ disciplina de siempre (CLAUDE.md §5): nada se da por bueno hasta oírlo o verlo
       entonces **una decisión aparte y explícita**, según CLAUDE.md §6, no una consecuencia
       automática.
 
+19. 🎨 **La Fase 3, que es lo único de este proyecto que un test no puede aprobar** (2026-09-09).
+    Es todo visual: **no hace falta amplificador para casi nada**, hace falta mirarlo.
+    - **Que la app abra oscura y sin fogonazo blanco.** Abrirla y cerrarla varias veces.
+      **Éxito esperado**: nunca se ve un destello claro antes de la primera pantalla. Si se ve, el
+      `windowBackground` de `themes.xml` no está entrando.
+    - ⚠️ **Con el teléfono en modo claro.** Poner el sistema en tema claro y abrir la app.
+      **Éxito esperado**: sigue oscura, entera y sin partes claras sueltas. Un diálogo o un menú
+      desplegable que salga blanco es la señal de que algún componente de Material se está
+      saltando el esquema.
+    - **Que el acento sea de la app y no del fondo de pantalla.** Cambiar el wallpaper por uno de
+      un color muy distinto (azul, verde) y volver a abrir. **Éxito esperado**: nada cambia — el
+      naranja sigue siendo el mismo. Era justo lo que fallaba antes de esta fase.
+    - ⚠️ **La prueba que de verdad importa, y necesita amplificador: el color de la tarjeta contra
+      el LED del panel.** Con Edit Mode, poner el color de Booster en **Verde** desde la app.
+      **Éxito esperado**: se enciende el LED **verde** del panel y la franja de la tarjeta se pone
+      verde. Repetir con Rojo y Amarillo.
+      ⚠️ **Si saliera al revés** (verde en la app enciende el rojo del panel), lo que está mal es
+      el orden de `EffectColor` —`midi.xml` tendría razón en su tabla de valores y no en su
+      etiquetado de slots— y el arreglo son **tres constantes**, no un cambio de diseño. Ver
+      CLAUDE.md §4.6 para la evidencia de por qué se apostó por verde = `00`.
+    - **Que se distinga el amarillo del slot del naranja del acento.** Poner un efecto en Amarillo
+      y mirar la tarjeta con un slider seleccionado al lado. **Éxito esperado**: se distinguen; y
+      aunque no se distinguieran de un vistazo, el selector lo dice con palabras. Si en el
+      teléfono resultan indistinguibles, lo que hay que mover es el ámbar del acento
+      (`EmberPrimary`), no el amarillo del slot — el slot es el hecho, el acento es la elección.
+    - **Legibilidad de las cinco tarjetas y de los encabezados de sección** en las tres pantallas,
+      con el brillo bajo. **Éxito esperado**: el gris de `onSurfaceVariant` y el acero de los
+      encabezados se leen; si no, subir su luminosidad en `Color.kt` — es un cambio de una línea.
+    - **El ícono en el lanzador**: que se vea la perilla y no un cuadro negro, con la máscara que
+      use el teléfono (círculo, cuadrado redondeado). Y con **íconos temáticos** activados
+      (Android 13+), que se vea el arco y no un disco relleno.
+    - **El nombre debajo del ícono**: que quepa «KTNA Control» sin cortarse.
+
+20. 🎨 **La Fase 4, visual como la 3**: los estados de la Biblioteca y los tres diálogos
+    destructivos (2026-09-09).
+    - **Abrir la Biblioteca justo al arrancar la app.** **Éxito esperado**: se ve «Cargando…»
+      una fracción de segundo (o nada, si el disco responde antes de que se note) y nunca el
+      mensaje de "no hay presets" mientras todavía no se sabe si hay algo.
+    - **Con presets ya importados, borrar uno y volver a la lista.** **Éxito esperado**: la
+      lista no parpadea a "Cargando…" en ningún momento — sigue mostrando el resto sin hueco.
+    - **Abrir un preset con bloques `DISPUTED`** (cualquier `.tsl` real de Boss Tone Studio los
+      trae: los tres `Contour` y `GafcExp1AsgnMinMax`) **en el editor, no solo al mirarlo o al
+      enviarlo.** **Éxito esperado**: la tarjeta de "no disponible" aparece bajo el nombre,
+      igual que en la vista de solo lectura.
+    - **Los tres diálogos destructivos, uno detrás de otro**: guardar en canal, enviar al
+      amplificador, y sobrescribir un preset de la Biblioteca. **Éxito esperado**: el paso final
+      de los dos primeros se ve idéntico salvo las palabras (mismo tono, mismo patrón "Sí,
+      `<verbo>`"), y el de la Biblioteca —de un solo paso— usa "Sí, sobrescribir" cuando pisa un
+      fichero y "Guardar" cuando no.
+
+21. ♿ **La Fase 5, la última visual: accesibilidad y calidad mínima** (2026-09-09). Como la
+    Fase 3, casi todo necesita mirarlo, no medirlo — el contraste ya está calculado en frío en
+    CLAUDE.md §4.9, así que aquí lo que falta es la parte que ningún cálculo confirma.
+    - **TalkBack en la barra de navegación y en `EffectCard`.** Activar TalkBack y recorrer las
+      tres pestañas y una tarjeta de efecto con gestos de exploración. **Éxito esperado**: cada
+      elemento se lee una sola vez, con el texto que ya se ve en pantalla — ninguno se lee dos
+      veces (el punto de color no debería anunciarse aparte del nombre del efecto ni del
+      selector «Verde/Rojo/Amarillo»).
+    - **La fila de un preset en la Biblioteca, con TalkBack.** Tocar la fila entera, no solo el
+      botón «Editar». **Éxito esperado**: TalkBack la anuncia como un elemento tocable completo,
+      y el área que responde al toque se siente igual de generosa que el resto de botones de la
+      app — no una franja fina alrededor del texto.
+    - **Tamaño de fuente del sistema al máximo** (Ajustes → Accesibilidad → Tamaño de fuente).
+      Recorrer las tres pantallas de dominio. **Éxito esperado**: el texto crece y sigue
+      cabiendo sin cortarse ni solaparse; los tamaños de perilla, franja y espaciado **no**
+      cambian — si cambiaran, sería la señal de que algo quedó en `.sp` por error.
+    - **Contraste a simple vista, con luz de sala normal y con poca luz.** Mirar el texto
+      secundario (gris de `onSurfaceVariant`) y los tres colores de slot sobre una tarjeta.
+      **Éxito esperado**: todo se lee sin esfuerzo — es la confirmación visual de los números ya
+      calculados en CLAUDE.md §4.9, no una medición nueva.
+
+### 2026-09-09 — QA: lo que hay que volver a comprobar con el amplificador
+
+Todo lo de esta tanda pasa los tests JVM; lo que sigue necesita el cable y el oído.
+
+1. **La variación, en los cinco canales y en las dos direcciones** (A.1). En cada uno de
+   Acoustic/Clean/Crunch/Lead/Brown: encender la variación → el sonido cambia y el LED del panel
+   se enciende; apagarla → vuelve al modelo base. **Resultado esperado**: el switch ya no se
+   queda clavado en OFF y se puede apagar. ⚠️ Probar además con un **sneaky amp** activo (p. ej.
+   `Pro Crunch`): el switch debe estar **habilitado**, y tocarlo cambia el modelo al `[CRUNCH]` /
+   `Var [Crunch]` de la perilla — es el comportamiento del botón VARIATION del panel, pero
+   conviene verlo y confirmar que no sorprende.
+2. **Las siete cadenas predefinidas** (A.2). Recorrer `CHAIN 1 · 2-1 · 3-1 · 4-1 · 2-2 · 3-2 ·
+   4-2` y comparar el diagrama con Boss Tone Studio. **Resultado esperado**: las siete secuencias
+   exactas del reporte de QA, y **el diagrama cambia al cambiar de cadena** (antes no cambiaba
+   nunca). Ojo también a que **no haya un segundo dump** por cada conexión: el log lo dice.
+3. **Que los valores crudos `00`..`06` sean los correctos** (A.2). Salen de código de FxFloorboard,
+   no de una prueba. Si alguna cadena sale cruzada, el orden de `ChainPreset` es lo primero a
+   mirar — en particular que las dos familias van seguidas, no intercaladas.
+4. **La Biblioteca, en el teléfono real** (A.3). Abrir **Presets**: deben verse el bloque en vivo
+   arriba, el divisor, el encabezado «BIBLIOTECA» y la lista, **desplazándose todo junto**.
+   ⚠️ Probar con la **escala de fuente del sistema al máximo**, que es donde el bug original se
+   manifestaba con más fuerza. **Resultado esperado**: la lista siempre se alcanza.
+5. **El selector de modelo en dos páginas** (C). Deslizar entre `AMP TYPE` y `SNEAKY AMPS`; que el
+   botón de variación **no aparezca** en la segunda; que al cambiar de canal el selector salte
+   solo a la página del modelo activo; y que con `Var [X]` puesto el chip marcado sea **X**.
+6. **La tarjeta de Solo en la pantalla de Efectos** (C), después de Reverb: que el on/off y el
+   nivel sigan haciendo lo mismo que hacían en la pantalla de amplificador.
+7. **La sensación del gesto con las tiras paginadas** (bloque C, cerrado el 2026-09-09).
+   **Implementado, pendiente de probar**: la matemática del paginado está cubierta por
+   `ControlPagingTest` y la compilación, pero *cómo se siente* solo lo dice el dedo. Qué mirar:
+   que **pasar de página no dispare una perilla ni una barra** (el conflicto que la decisión dice
+   estar resuelto por el eje + `KnobInteraction`); que **mantener pulsado para ajustar no se sienta
+   lento** ahora que el mismo dedo también pagina; que **3-4 controles por tira se lean** con el
+   amplificador delante y la letra del sistema en su tamaño normal; y que en la última página los
+   controles **no se estiren** (van con hueco de relleno a propósito).
+   **Resultado esperado**: arrastrar en horizontal pagina, mantener-y-arrastrar ajusta, y ninguno
+   de los dos se cuela en el otro.
+8. **El pase visual de las tarjetas** (mismo bloque): que `BlockHeader` con el interruptor a la
+   derecha se lea bien en Noise Gate, Contour, EQ1/EQ2, cadena y Solo, y que los nombres cortos
+   (`short_*`) no queden cortados en una celda de 80 dp con la letra grande.
+9. **SOLO EQ: ¿contesta la región `60 00 0F 1x` a un GET?** (B.1). Es la pregunta que decide si
+   cablear el bloque es barato o inaceptable — la misma que sigue abierta para los Contour por
+   slot. **Resultado esperado si va bien**: el GET contesta rápido y los diez controles se pueden
+   registrar sin ampliar el dump ni paralelizar los respaldos.
+
+11. **El GET global, y que no falte ninguno de los individuales** (2026-09-10).
+   **Implementado, pendiente de probar.** Qué mirar: que el botón de arriba **repueble todo** tras
+   mover perillas en el amplificador con Edit Mode apagado (que es cuando más se usa), que diga
+   «Releyendo…» mientras dura, y que en la **Biblioteca** (editor offline) no aparezca ningún botón
+   de leer, ni el global ni dentro de las celdas. ⚠️ Comprobar en particular los **Contour por
+   slot**, que son los únicos que caen fuera del dump y dependen del GET de respaldo en serie — si
+   esa región no contesta, es donde se notaría la pérdida del botón individual.
+   **Resultado esperado**: un toque deja la pantalla igual que una reconexión.
+
+10. **Los seis niveles del panel como tira vertical, y el aspecto nuevo de las barras**
+   (2026-09-10). **Implementado, pendiente de probar.** Qué mirar: que en **Amplificador** y en el
+   **editor de la Biblioteca** los seis se lean y se ajusten igual de bien que antes en horizontal
+   —Gain sigue siendo Gain—, que la página 1 sea **`Bass · Middle · Treble`** y la 2
+   **`Gain · Volume · Presence`** (y que sigan siendo tres por página en horizontal, donde cabrían
+   más), que la barra más alta y gruesa **no obligue a desplazarse** para ver el resto de la
+   pantalla, que **pasar de la página 1 a la 2** no dispare ninguna barra, y que la tapa del fader y la pastilla del valor se distingan con el amplificador
+   delante y a media luz. ⚠️ Comprobar también el caso que motiva el suelo de 3 dp: **un nivel en
+   0 tiene que verse distinto de uno sin leer** (`—`). **Resultado esperado**: una sola forma de
+   control continuo en toda la app, y ningún gesto perdido.
+
 ## Hallazgos de diagnóstico
 
 Bugs **investigados y reproducidos pero todavía sin arreglar**, con la evidencia que los
@@ -2607,9 +3010,30 @@ confirmarlo con audio o con el amplificador real).
    visible) y barra inferior, Logs como entrada secundaria, y el estado explícito de "sin
    amplificador" en vez de controles grises — sin adoptar Navigation Compose, por las razones de
    CLAUDE.md §4.2. Ver "Hecho" y "Pendiente por probar", punto 18.
-   **Lo que sigue de este bloque es lo que necesita hardware**: probar las pantallas contra el
-   amplificador ("Pendiente por probar", puntos 16, 17 y 18). Ya no quedan composables que
-   repartir ni shell que montar; lo siguiente es pulir lo que las pruebas señalen.
+   ✅ **Fase 3 hecha el 2026-09-09**: sistema de diseño propio —chasis oscuro con un acento
+   ámbar, paleta/tipografía/espaciado como fuente única en `ui/theme/`— aplicado a las tres
+   pantallas, la barra superior y la inferior; `EffectCard` teñida por su **slot de color activo**;
+   ícono adaptativo vectorial propio; y el nombre confirmado en «KTNA Control». La dirección y sus
+   renuncias, en CLAUDE.md §4.6. Ver "Hecho" y "Pendiente por probar", punto 19.
+   ✅ **Fase 4 hecha el 2026-09-09**: los cuatro estados de la Biblioteca (vacía de verdad,
+   cargando, fichero que no parsea, bloques `DISPUTED` también en el editor) y la consistencia
+   entre los tres diálogos destructivos —`DestructiveConfirmDialog` compartido por "Guardar en
+   canal" y "Enviar al amplificador"; "Guardar"/"Guardar como" se queda de un paso, homologado
+   solo en el verbo del botón cuando sobrescribe—. La decisión y por qué no se forzó un solo
+   componente para los tres, en CLAUDE.md §4.7. Ver "Hecho" y "Pendiente por probar", punto 20.
+   ✅ **Fase 5 hecha el 2026-09-09, y con ella se cierran las cinco fases del plan de UI sin
+   amplificador**: pase de accesibilidad y calidad mínima sobre el único tema —`contentDescription`
+   (la auditoría encontró que la app no tiene ningún ícono real, consecuencia de la Fase 2),
+   contraste calculado con la fórmula de WCAG 2 (once pares de la paleta, todos por encima de su
+   umbral, ningún color de slot se movió), área táctil (un solo `clickable` hecho a mano, ya no
+   depende de un efecto lateral) y escala de fuente (auditado, sin el patrón `.dp`/`.sp` que se
+   buscaba). La decisión y los once contrastes, en CLAUDE.md §4.9. Ver "Hecho" y "Pendiente por
+   probar", punto 21.
+   **Lo que sigue de este bloque es exclusivamente lo que necesita hardware**: probar las
+   pantallas contra el amplificador ("Pendiente por probar", puntos 16 a 21). Ya no quedan
+   composables que repartir, ni shell que montar, ni tema que definir, ni estados de Biblioteca
+   sin cubrir, ni pase de accesibilidad pendiente; lo siguiente es pulir lo que las pruebas
+   señalen.
 
 7. **Grabación de audio USB — investigación (2026-09-08)**. Biblioteca de grabaciones
    —grabar, listar, reproducir, renombrar, borrar—, **explícitamente sin edición ni
@@ -2844,7 +3268,123 @@ confirmarlo con audio o con el amplificador real).
    propósito declarado del proyecto —una alternativa a Boss Tone Studio, que edita presets— y
    ninguno de los bloques 1-6 depende de ella.
 
+### Del QA del 2026-09-09 (CLAUDE.md §4.10)
+
+- ⏸️ **Cablear el bloque SOLO EQ** (`60 00 0F 10`–`0F 19`, ya documentado en `SoloEqParams`).
+  ⚠️ **Bloqueado por una decisión de rendimiento, no por falta de datos**: las diez direcciones
+  caen fuera del dump, y `loadFromDump` recupera lo que falta con **un GET en serie de hasta
+  800 ms por control**. Hoy hay seis controles así (los Contour por slot) y ya cuestan hasta 4,8 s
+  por recarga; diez más lo llevarían a ~12,8 s **en cada conexión y cada cambio de canal**. Las
+  dos salidas ya identificadas en §5 son **ampliar el rango del dump para cubrir `60 00 0F xx`** o
+  **paralelizar los GET de respaldo**. Ninguna se hace antes de saber si esa región contesta
+  (ver "Pendiente por probar", punto 7). Hay un test que fija en seis el número de controles fuera
+  del dump, así que esto no puede colarse por descuido.
+- ⏸️ **Extraer el bloque SOLO DELAY** (`60 00 0F 1A`–`0F 25`, `midi.xml:50021-50048`): Delay Sw,
+  Delay Time (2 bytes), Feedback, Effect, Direct, Filter, High Cut, Modulation, Rate y Depth.
+  Localizado al investigar el SOLO EQ; no se extrajo porque el encargo era el EQ y anotarlo a
+  medias sería peor que anotar dónde está. Con él, `UserPatch%Patch_Mk2V2` queda desglosado entero.
+
 ## Notas y decisiones técnicas
+
+- **2026-09-09 — Fase 5: por qué "cero íconos" es la respuesta al punto 1, y por qué ningún
+  color de slot se movió en el punto 2.**
+  - **El barrido de `contentDescription` fue un barrido, no una suposición.** Antes de tocar
+    nada se hizo grep de `Icon(`, `IconButton(`, `Image(` y `contentDescription` en todo `ui/` —
+    cero coincidencias en las cuatro. No es que la app tuviera pocos íconos sin describir: no
+    tiene ninguno, porque la Fase 2 ya había evitado `material-icons-core` sustituyendo cada
+    pictograma por su palabra en `Text`. El trabajo de este punto se redujo a confirmar eso con
+    datos y a marcar decorativo lo único que sí es puramente visual —el punto de color de
+    `EffectCard`— en vez de darle una descripción redundante con el texto que ya tiene al lado.
+  - ⚠️ **El contraste se calculó con la fórmula real de WCAG 2, no con una tabla de "colores
+    seguros" ni a ojo** (`contrastRatio`, `ui/theme/Contrast.kt`): luminancia relativa por canal
+    más `(L1+0.05)/(L2+0.05)`, la misma que usa cualquier verificador externo. Se aplicó a los
+    once pares que de verdad aparecen en la app —no a combinaciones hipotéticas— y los once
+    superan su umbral, con el rojo de slot como el más ajustado (`5.01:1` contra el `3:1` que le
+    toca por ser franja+punto y no texto). **La instrucción explícita era frenar y documentar si
+    algún ajuste obligaba a mover un color de slot fuera de lo fijado como hecho del
+    dispositivo en la Fase 3 — no hizo falta, y se documenta igual que se habría documentado el
+    conflicto**: los tres colores ya se habían elegido por legibilidad sobre grafito, y este
+    cálculo lo confirma con un número en vez de dejarlo en la intuición de quien los eligió.
+  - **`EffectSlotColors.Unknown` queda fuera de la tabla de cumplimiento a propósito, no por
+    descuido**: da `1.67:1`, por debajo del umbral de componente, pero es el gris que se pinta
+    cuando el amplificador todavía no dijo de qué color está el slot — su bajo contraste es la
+    señal correcta, no un fallo. WCAG 1.4.11 exige contraste a lo que transmite información, y
+    `Unknown` transmite la ausencia de ella.
+  - **El único `Modifier.clickable` hecho a mano de todo el proyecto pasó de "cumple por
+    casualidad" a "cumple por diseño"**: antes su altura mínima dependía de que el `TextButton`
+    de al lado lo empujara a 48 dp con la garantía de Material 3; ahora lleva
+    `Modifier.heightIn(min = 48.dp)` explícito, así que seguirá cumpliendo aunque cambie lo que
+    hay al lado. Todo lo demás de la app ya cumplía por los componentes de fábrica de Material 3
+    (`LocalMinimumInteractiveComponentEnforcement`, activado por defecto y nunca desactivado en
+    este proyecto — comprobado por grep).
+
+- **2026-09-09 — Fase 4: por qué solo dos de los tres diálogos comparten componente, y qué
+  fallo real corrigen los estados de la Biblioteca.**
+  - **La pregunta no era "¿los tres se ven parecido?", era "¿los tres tienen la misma forma?".**
+    Guardar en canal y enviar al amplificador sí: un paso que junta datos y un paso que solo
+    confirma. Guardar/Guardar como no: es un único `AlertDialog` con el nombre y el aviso juntos.
+    Se extrajo `DestructiveConfirmDialog` para los dos que coinciden, y se dejó el tercero como
+    estaba —homologando solo el verbo del botón ("Sí, sobrescribir") cuando de verdad pisa algo—
+    en vez de forzarle un segundo paso que no tenía. Añadir un paso a un diálogo que no lo
+    necesitaba habría sido la clase de cambio de comportamiento que la tarea pedía evitar por
+    conseguir una consistencia que no hacía falta.
+  - ⚠️ **El fallo que corrigen los estados no era cosmético: era una ambigüedad real.**
+    `entries.isEmpty()` decía lo mismo en dos situaciones distintas —"todavía no leí nada" y "leí
+    y no hay nada"— así que el mensaje "Biblioteca vacía" salía, aunque brevemente, siendo falso.
+    `LibraryListState` (`Loading`/`Empty`/`Loaded`) es la misma idea que `ShellState.availabilityOf`
+    aplicada a ficheros en vez de al amplificador: una función pura, con tests JVM, que decide
+    qué enseñar a partir de lo que expone el ViewModel — la Composable no mira `loading` a pelo.
+  - **`loading` no gana si ya hay entradas**, a propósito: una recarga en segundo plano no debe
+    hacer parpadear una lista que ya tenía contenido real, porque la lista de verdad no
+    desaparece en ningún momento — parpadear ahí mentiría más que no decir nada.
+  - **Los bloques `DISPUTED` ya tenían dos sitios donde enseñarse** (la vista de solo lectura y
+    la revisión previa al envío) **y les faltaba el tercero, el editor**, que es justo donde más
+    tiempo pasa quien está editando un preset real. Reutilizar `UnavailableSection` en los tres
+    sitios es la misma regla de siempre: lo que se comparte de verdad se extrae una vez, no se
+    reescribe donde haga falta.
+
+- **2026-09-09 — Fase 3: por qué chasis oscuro, y qué parte del color de un efecto es un hecho.**
+  - **La dirección visual la decidió el color de los efectos, no el gusto.** Cada efecto tiene tres
+    slots —verde/rojo/amarillo— y eso lo enciende el propio panel: es **hecho del dispositivo**.
+    Para que esos tres tonos se lean como señal necesitan un fondo neutro. La Opción B (Material 3
+    sembrado con ámbar) tiñe **todas** las superficies de marrón-ámbar, y un punto amarillo sobre
+    ámbar deja de ser un punto amarillo. Grafito es el único fondo que no compite con los tres.
+  - ⚠️ **La app pasa a ser siempre oscura y sin color dinámico, y las dos son renuncias.** Quien
+    tenga el teléfono en claro verá esta app oscura igual. A cambio: los colores de slot solo hay
+    que afinarlos contra un fondo, y ningún wallpaper puede meter una superficie amarillenta debajo
+    de un slot amarillo. `dynamicColor` se **retira**, no se pone en `false` — dejar el parámetro
+    es dejar la puerta.
+  - ⚠️ **El acento naranja cae entre el rojo y el amarillo de los slots, y eso no tiene arreglo por
+    tono**: cualquier naranja lo hace. Se resuelve **por la forma** — el acento rellena controles,
+    el slot es una franja de borde y un punto — y sobre todo porque **el slot siempre lleva su
+    nombre escrito al lado**. El color es refuerzo, nunca la única vía. Lo mismo con `error`, que
+    comparte tono con el slot rojo y por eso solo tiñe texto.
+  - ✅ **La correspondencia valor→color estaba en duda y se cerró con un fichero real.**
+    `midi.xml` dice **las dos cosas**: `00` = RED en la tabla del propio parámetro (`:43961`) y en
+    su bloque de conversión (`:50863`), pero etiqueta el primer slot de tipo (`06 24`) como
+    **GREEN** (`:43567`). Cruzándolo con el modelo de §5.2 —el tipo activo refleja el slot
+    encendido— las dos afirmaciones no pueden ser ciertas a la vez.
+    El desempate: en `default_mk2.tsl` los cinco efectos tienen color `00`, y en **los cinco** el
+    tipo activo coincide con el del **primer** slot, con los otros dos en valores distintos. **5 de
+    5**, contra 3 candidatos cada uno. Más dos testigos independientes (`Adresses.txt:72-74` y
+    `color_assign.json`). **`EffectColor` ya era correcto**; lo que gana es una justificación.
+    ⚠️ Queda **una mirada al panel** ("Pendiente por probar", punto 19); si estuviera al revés, el
+    arreglo son tres constantes.
+  - **Lo que es hecho y lo que es elección, separado a propósito**: hecho = qué valor es cada
+    color; elección = los hex (`#3ECF5C` / `#FF3B30` / `#FFD426`). **Ninguna fuente dice qué verde
+    enciende el LED**, ni la habría — es luz, no un `#RRGGBB`.
+  - ⚠️ **Un slot que la app no reconoce no se pinta de ningún color**, cae en gris de borde. Es la
+    misma regla de `KatanaEnumParameter` (§4.3) llevada a lo visual: adivinar un color sería
+    enseñar como confirmado algo que el amplificador no ha dicho. Y es el caso normal antes del
+    primer dump.
+  - **`Spacing` no se propagó a todo el proyecto, y es decisión.** De los ~108 literales `.dp`, la
+    mayoría son **tamaños de componente** —el diámetro de una perilla, la altura de una barra de
+    EQ—, que no son espaciado. Una escala de espaciado que absorba tamaños deja de significar algo.
+  - **El ícono repite el gesto del código**: 270° desde 135°, los mismos `KNOB_START_DEGREES` /
+    `KNOB_SWEEP_DEGREES` que dibuja `KnobDial`. Y capa monocroma aparte, porque el reteñido de los
+    íconos temáticos convertiría la de delante en un disco liso.
+  - **El nombre no se "mejora" a «Katana Control»**: Katana es marca de Boss y esta app no es
+    oficial (§1). Ponerle el nombre del producto a una app de terceros invita a confundirla.
 
 - **2026-09-09 — Fase 2: por qué no entró Navigation Compose, y qué se hizo con los cambios sin
   guardar.**

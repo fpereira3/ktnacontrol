@@ -2,6 +2,7 @@ package dev.alonx3.ktnacontrol.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,12 +27,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.alonx3.ktnacontrol.R
 import dev.alonx3.ktnacontrol.protocol.PresetSave
 import dev.alonx3.ktnacontrol.ui.theme.KTNAControlTheme
+import dev.alonx3.ktnacontrol.ui.theme.Spacing
 import dev.alonx3.ktnacontrol.usb.UsbConnectionState
 
 /**
@@ -81,53 +82,53 @@ internal fun PresetsScreen(
     modifier: Modifier = Modifier,
     libraryViewModel: LibraryViewModel = viewModel(),
 ) {
-    val opened by libraryViewModel.opened.collectAsStateWithLifecycle()
-    val editing by libraryViewModel.editing.collectAsStateWithLifecycle()
-
-    // ⚠️ Con un preset abierto (vista de detalle o editor), la Biblioteca ocupa la pantalla
-    // entera y el bloque en vivo **no se pinta**. Es la cuarta señal de separación: dentro de un
-    // preset no hay botones que escriban en el amplificador salvo "Enviar al amplificador…",
-    // que es del propio preset. Dejar "Guardar preset en el amplificador" flotando encima de un
-    // editor offline sería justo la mezcla que esta pantalla quiere evitar.
-    val browsingLibrary = opened == null && editing == null
-
-    Column(modifier = modifier.fillMaxSize()) {
-        if (browsingLibrary) {
-            LiveAmpSection(
-                state = state,
-                editMode = editMode,
-                onEditModeChanged = onEditModeChanged,
-                currentChannel = currentChannel,
-                presetSaveInFlight = presetSaveInFlight,
-                onSavePreset = onSavePreset,
-                exportInFlight = exportInFlight,
-                onExportPreset = onExportPreset,
-                onScanClicked = onScanClicked,
-            )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                SectionHeader(stringResource(R.string.presets_library_title))
-                Text(
-                    text = stringResource(R.string.presets_library_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        // La Biblioteca entera, sin cambios: lista, importar, ver, editar offline, guardar y
-        // "Enviar al amplificador…". **El mismo ViewModel** que se observa arriba para saber si
-        // hay un preset abierto — `viewModel()` devuelve la misma instancia, pero se pasa
-        // explícito para que no dependa de esa coincidencia.
-        //
-        // ⚠️ `weight(1f)` y no su `fillMaxSize()` a secas: dentro de una Column, un hijo que
-        // pide la altura entera la pide **de la pantalla**, no la que queda libre bajo el
-        // encabezado — y el final de la lista se saldría por abajo.
-        LibraryPane(
-            modifier = Modifier.weight(1f),
-            viewModel = libraryViewModel,
-            sendToAmp = sendToAmp,
+    // La Biblioteca entera, sin cambios: lista, importar, ver, editar offline, guardar y
+    // "Enviar al amplificador…". **El mismo ViewModel** que se observa arriba para saber si
+    // hay un preset abierto — `viewModel()` devuelve la misma instancia, pero se pasa
+    // explícito para que no dependa de esa coincidencia.
+    //
+    // ⚠️ **El bloque en vivo va DENTRO, por la ranura `header`, y no apilado encima** (QA
+    // 2026-09-09, A.3: "la Biblioteca no aparece / no se encuentra"). Antes esto era una
+    // `Column` con el bloque en vivo arriba y `LibraryPane` abajo con `Modifier.weight(1f)`, y
+    // ese `weight` reparte **lo que sobra**: como el bloque en vivo no tenía tope ni scroll, en
+    // una pantalla corta o con la letra grande se quedaba con todo el alto y la Biblioteca se
+    // medía a **cero**. Y al no hacer scroll el contenedor de fuera, no había forma de llegar a
+    // ella — se veía una pantalla de "Presets" sin biblioteca por ninguna parte.
+    //
+    // Con la ranura hay **un solo scroll** para las dos mitades: el bloque en vivo empuja la
+    // lista, no la borra. La separación entre "esto escribe en el amplificador" y "esto son
+    // ficheros" no cambia: sigue siendo encabezado + subtítulo + divisor + reglas de
+    // habilitación distintas (CLAUDE.md §4.2).
+    //
+    // ⚠️ Con un preset abierto, `LibraryPane` vuelve antes de pintar la ranura, así que el
+    // bloque en vivo desaparece solo — que es lo que antes hacía el `browsingLibrary` de aquí.
+    // Esa cuarta señal de separación se mantiene, ahora sin que este llamador tenga que
+    // duplicar la condición.
+    LibraryPane(
+        modifier = modifier.fillMaxSize(),
+        viewModel = libraryViewModel,
+        sendToAmp = sendToAmp,
+    ) {
+        LiveAmpSection(
+            state = state,
+            editMode = editMode,
+            onEditModeChanged = onEditModeChanged,
+            currentChannel = currentChannel,
+            presetSaveInFlight = presetSaveInFlight,
+            onSavePreset = onSavePreset,
+            exportInFlight = exportInFlight,
+            onExportPreset = onExportPreset,
+            onScanClicked = onScanClicked,
         )
+        HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.sm))
+        Column(modifier = Modifier.padding(horizontal = Spacing.lg)) {
+            SectionHeader(stringResource(R.string.presets_library_title))
+            Text(
+                text = stringResource(R.string.presets_library_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -165,7 +166,7 @@ private fun LiveAmpSection(
     var savingPreset by rememberSaveable { mutableStateOf(false) }
     var exportingPreset by rememberSaveable { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.sm)) {
         SectionHeader(stringResource(R.string.presets_live_title))
         Text(
             text = stringResource(R.string.presets_live_subtitle),
@@ -193,10 +194,10 @@ private fun LiveAmpSection(
         )
         if (!editMode) EditModeNotice()
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(Spacing.xs))
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedButton(
@@ -286,22 +287,14 @@ private fun PresetSaveDialog(
     val sanitized = remember(name) { PresetSave.decodeName(PresetSave.encodeName(name)) }
 
     if (confirming) {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(stringResource(R.string.preset_save_confirm_title, targetLabel)) },
-            text = {
-                Text(stringResource(R.string.preset_save_confirm_body, sanitized, targetLabel))
-            },
-            confirmButton = {
-                TextButton(onClick = { onConfirm(sanitized, target) }) {
-                    Text(stringResource(R.string.preset_save_confirm_action, targetLabel))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) {
-                    Text(stringResource(R.string.dialog_back))
-                }
-            },
+        // El aspecto de este paso final es el mismo que el de "Enviar al amplificador…": ver
+        // DestructiveConfirmDialog en Controls.kt y CLAUDE.md §4.7 para el porqué.
+        DestructiveConfirmDialog(
+            title = stringResource(R.string.preset_save_confirm_title, targetLabel),
+            body = stringResource(R.string.preset_save_confirm_body, sanitized, targetLabel),
+            confirmLabel = stringResource(R.string.preset_save_confirm_action, targetLabel),
+            onConfirm = { onConfirm(sanitized, target) },
+            onBack = { confirming = false },
         )
         return
     }
@@ -337,7 +330,7 @@ private fun PresetSaveDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Spacing.sm))
                 ChipSelector(
                     label = stringResource(R.string.preset_save_target_label),
                     options = PresetSave.CHANNELS.map { it to PresetSave.channelLabel(it) },
@@ -369,7 +362,7 @@ private fun PresetSaveDialog(
                     },
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Spacing.sm))
                 Text(
                     text = stringResource(R.string.preset_save_warning),
                     style = MaterialTheme.typography.bodySmall,

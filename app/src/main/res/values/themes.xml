@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.KTNAControl" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      ⚠️ El padre era `android:Theme.Material.Light.NoActionBar`, o sea que **la ventana era
+      blanca antes de que Compose pintara nada**: un fogonazo blanco en cada arranque de una app
+      que es siempre oscura (CLAUDE.md §4.6). El `windowBackground` es el mismo
+      `ChassisBackground` que usa el tema de Compose, así que el arranque ya no se nota.
+    -->
+    <style name="Theme.KTNAControl" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/chassis_background</item>
+    </style>
 </resources>

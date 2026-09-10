@@ -65,7 +65,6 @@
     <string name="debug_connection_fx_level">FX: %1$s</string>
     <string name="debug_connection_delay_level">Delay: %1$s</string>
     <!-- Botón junto a cada slider: relee el parámetro desde el amplificador. -->
-    <string name="debug_connection_read_level">GET</string>
 
     <!-- Sección de sliders: nombres de efecto y controles de tipo selector -->
     <string name="effect_boost">Boost</string>
@@ -128,6 +127,9 @@
     <!-- Biblioteca de presets: importar y ver .tsl sin amplificador, CLAUDE.md §5 -->
     <string name="library_import">Importar .tsl…</string>
     <string name="library_importing">Importando…</string>
+    <!-- Solo sale mientras se lee el disco la primera vez, antes de saber si hay algo o no
+         (LibraryListState.Loading, CLAUDE.md §4.7). -->
+    <string name="library_loading">Cargando…</string>
     <string name="library_empty">No hay presets importados todavía. Pulsa «Importar .tsl…» y elige un archivo exportado desde Boss Tone Studio.</string>
     <string name="library_offline_note">La biblioteca lee archivos: funciona sin el amplificador conectado. Solo lectura — todavía no se puede editar ni enviar al amplificador.</string>
     <string name="library_entry_unreadable">No se pudo leer: %1$s</string>
@@ -241,12 +243,51 @@
     <string name="library_edit">Editar</string>
     <string name="library_save">Guardar</string>
     <string name="library_save_as">Guardar como…</string>
+    <!-- Solo cuando "Guardar" va a pisar el fichero de origen — mismo patrón "Sí, <verbo>"
+         que los otros dos diálogos destructivos (CLAUDE.md §4.7). -->
+    <string name="library_save_overwrite_action">Sí, sobrescribir</string>
     <string name="library_unsaved">Cambios sin guardar</string>
     <string name="library_name_preview">Se guardará como: %1$s</string>
     <string name="library_overwrite_warning">Esto sobrescribirá «%1$s» en la biblioteca.</string>
     <string name="library_export">Exportar a .tsl…</string>
     <string name="chain_diagram_title">Orden real de la cadena (solo lectura)</string>
     <string name="chain_diagram_empty">Sin leer todavía</string>
-    <string name="refresh_state">Releer estado</string>
+    <string name="refresh_state">Releer del amplificador</string>
     <string name="refresh_in_flight">Releyendo…</string>
+    <!-- Selector de modelo de amplificador en dos páginas (QA 2026-09-09, bloque C). -->
+    <string name="amp_page_type">Amp type</string>
+    <string name="amp_page_sneaky">Sneaky amps</string>
+    <string name="amp_variation_on">Variación activada</string>
+    <string name="amp_variation_off">Variación desactivada</string>
+    <!-- Nombres cortos para las tiras de controles verticales (QA 2026-09-09, bloque C).
+         Van aparte de los `..._level` porque aquellos llevan el valor dentro ("Drive: 42") y
+         una celda de 80 dp solo tiene sitio para el nombre: el valor se lee encima de la barra. -->
+    <string name="short_gain">Gain</string>
+    <string name="short_volume">Volume</string>
+    <string name="short_bass">Bass</string>
+    <string name="short_middle">Middle</string>
+    <string name="short_treble">Treble</string>
+    <string name="short_presence">Presence</string>
+    <string name="short_boost">Boost</string>
+    <string name="short_mod">Mod</string>
+    <string name="short_fx">FX</string>
+    <string name="short_delay">Delay</string>
+    <string name="short_reverb">Reverb</string>
+    <string name="short_drive">Drive</string>
+    <string name="short_bottom">Bottom</string>
+    <string name="short_tone">Tone</string>
+    <string name="short_solo_level">Solo Lvl</string>
+    <string name="short_effect_level">Effect</string>
+    <string name="short_direct_mix">Direct</string>
+    <string name="short_time">Time</string>
+    <string name="short_feedback">Feedback</string>
+    <string name="short_pre_delay">Pre Dly</string>
+    <string name="short_density">Density</string>
+    <string name="short_threshold">Thresh</string>
+    <string name="short_release">Release</string>
+    <string name="short_freq_shift">Freq Shift</string>
+    <string name="short_chorus_pre_delay_low">Pre Dly L</string>
+    <string name="short_chorus_pre_delay_high">Pre Dly H</string>
+    <string name="short_contour_slot_freq_shift">Freq %1$d</string>
+    <string name="contour_slot_shape_n">Shape %1$d</string>
 </resources>

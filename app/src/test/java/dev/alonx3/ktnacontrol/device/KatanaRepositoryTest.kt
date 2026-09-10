@@ -4,6 +4,7 @@ import dev.alonx3.ktnacontrol.protocol.Address
 import dev.alonx3.ktnacontrol.protocol.AmpCategory
 import dev.alonx3.ktnacontrol.protocol.AmpType
 import dev.alonx3.ktnacontrol.protocol.BoostType
+import dev.alonx3.ktnacontrol.protocol.ChainPreset
 import dev.alonx3.ktnacontrol.protocol.DelayType
 import dev.alonx3.ktnacontrol.protocol.EffectColor
 import dev.alonx3.ktnacontrol.protocol.KatanaAddresses
@@ -1299,6 +1300,14 @@ class KatanaRepositoryTest {
             currentChannel = channel
             messages.emit(RolandSysEx.set(KatanaAddresses.ACTIVE_CHANNEL, MidiBytes.encode(channel, 2)))
         }
+
+        /**
+         * El amplificador dice que la cadena predefinida cambió — lo que pasa al elegir una
+         * en la UI, ya que el SET es optimista y `06 20` sí vive dentro del dump.
+         */
+        suspend fun reportChainType(value: Int) {
+            messages.emit(RolandSysEx.set(KatanaAddresses.CHAIN_TYPE, byteArrayOf(value.toByte())))
+        }
     }
 
     /**
@@ -1346,6 +1355,135 @@ class KatanaRepositoryTest {
                 mutex.withLock { reload() }
             }
         }
+    }
+
+    /**
+     * Igual que [startTestReloadCoordinator] pero con **los dos disparadores** que tiene hoy el
+     * coordinador real: el canal y la cadena predefinida (QA 2026-09-09, bloque A.2).
+     *
+     * Reproduce la estructura que importa: un solo `MutableStateFlow` conflado, un solo
+     * `collectLatest`, guard revalidado después del margen para cada clase de petición.
+     */
+    private fun CoroutineScope.startTestReloadCoordinatorWithChain(
+        repository: KatanaRepository,
+        settleMillis: Long,
+        onReload: () -> Unit = {},
+    ): Job {
+        val mutex = Mutex()
+        var loadedChannel: Int? = null
+        var loadedChainType: Int? = null
+        var reloadInFlight = false
+        // null = recarga de conexión; Pair(esCanal, valor) = uno de los dos disparadores.
+        val requests = MutableStateFlow<Pair<Boolean, Int>?>(null)
+
+        return launch {
+            launch {
+                repository.channel.state.filterNotNull().collect { requests.value = true to it }
+            }
+            launch {
+                // ⚠️ El guard que importa: `06 20` vive **dentro** del dump, así que se
+                // repuebla a mitad de la recarga. Sin esto, esa repoblación cancelaría la
+                // recarga en vuelo y lanzaría otra. Espeja a `DebugConnectionViewModel`.
+                repository.chainType.state.filterNotNull().collect {
+                    if (reloadInFlight) return@collect
+                    requests.value = false to it
+                }
+            }
+            requests.collectLatest { request ->
+                if (request != null) {
+                    val (isChannel, value) = request
+                    val loaded = if (isChannel) loadedChannel else loadedChainType
+                    if (value == loaded) return@collectLatest
+                    delay(settleMillis)
+                    val stillLoaded = if (isChannel) loadedChannel else loadedChainType
+                    if (value == stillLoaded) return@collectLatest
+                }
+                mutex.withLock {
+                    reloadInFlight = true
+                    try {
+                        repository.loadFromDump()
+                    } finally {
+                        reloadInFlight = false
+                    }
+                    loadedChannel = repository.channel.state.value
+                    loadedChainType = repository.chainType.state.value
+                    onReload()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `cambiar la cadena predefinida dispara una relectura de las veinte ranuras`() = runBlocking {
+        // ⚠️ El bug de QA A.2: "el diagrama no cambia al cambiar de cadena". Elegir una cadena
+        // reescribe `60 00 06 00`–`06 13` dentro del amplificador, y nada volvía a leerlas.
+        val link = DelayedFakeLink(this, replyDelayMs = 5L)
+        val repo = repository(link, this)
+
+        val coordinator = startTestReloadCoordinatorWithChain(repo, settleMillis = 60L)
+
+        delay(400) // que termine la recarga de conexión
+        val trasConexion = link.dumpRequests.get()
+
+        link.reportChainType(ChainPreset.CHAIN_4_2.value)
+        delay(600)
+
+        assertEquals(
+            "cambiar de cadena debe releer el dump, que es lo que repuebla las 20 ranuras",
+            trasConexion + 1,
+            link.dumpRequests.get(),
+        )
+
+        coordinator.cancel()
+        repo.close()
+    }
+
+    @Test
+    fun `la relectura por cadena no entra en bucle con el propio dump`() = runBlocking {
+        // El dump vuelve a traer `06 20`, así que sin guard esto giraría para siempre. Es el
+        // mismo riesgo que ya tenía el canal, y se ataja igual: `loadedChainType`.
+        val link = DelayedFakeLink(this, replyDelayMs = 5L)
+        val repo = repository(link, this)
+
+        val coordinator = startTestReloadCoordinatorWithChain(repo, settleMillis = 60L)
+
+        delay(400)
+        link.reportChainType(ChainPreset.CHAIN_3_1.value)
+        delay(1_200) // tiempo de sobra para que un bucle se delatara
+
+        assertEquals(
+            "una recarga de conexión + una por el cambio de cadena, y ahí se para",
+            2,
+            link.dumpRequests.get(),
+        )
+
+        coordinator.cancel()
+        repo.close()
+    }
+
+    @Test
+    fun `cadenas seguidas coalescen en una sola relectura`() = runBlocking {
+        val link = DelayedFakeLink(this, replyDelayMs = 5L)
+        val repo = repository(link, this)
+
+        val coordinator = startTestReloadCoordinatorWithChain(repo, settleMillis = 60L)
+
+        delay(400)
+        val trasConexion = link.dumpRequests.get()
+
+        link.reportChainType(ChainPreset.CHAIN_2_1.value); delay(20)
+        link.reportChainType(ChainPreset.CHAIN_3_1.value); delay(20)
+        link.reportChainType(ChainPreset.CHAIN_4_1.value)
+        delay(700)
+
+        assertEquals(
+            "tres cambios rápidos son una sola recarga, como con el canal",
+            trasConexion + 1,
+            link.dumpRequests.get(),
+        )
+
+        coordinator.cancel()
+        repo.close()
     }
 
     @Test

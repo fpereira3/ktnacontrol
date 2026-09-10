@@ -1,58 +1,68 @@
 package dev.alonx3.ktnacontrol.ui.theme
 
-import android.app.Activity
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+/**
+ * El esquema de color de la app. **Uno solo** — ver [KTNAControlTheme] para el porqué.
+ *
+ * Se construye sobre `darkColorScheme` y no sobre `lightColorScheme` porque eso es lo que hace
+ * que los componentes de Material que no se tocan aquí (menús, diálogos, `Snackbar`) calculen
+ * bien sus elevaciones tonales sobre un fondo oscuro.
+ */
+private val ChassisColorScheme = darkColorScheme(
+    primary = EmberPrimary,
+    onPrimary = EmberOnPrimary,
+    primaryContainer = EmberContainer,
+    onPrimaryContainer = EmberOnContainer,
+    secondary = SteelSecondary,
+    onSecondary = ChassisBackground,
+    secondaryContainer = SteelContainer,
+    onSecondaryContainer = SteelOnContainer,
+    // El terciario no se usa como acento propio: se iguala al secundario para que ningún
+    // componente de Material saque de la manga un tercer color que nadie ha elegido.
+    tertiary = SteelSecondary,
+    onTertiary = ChassisBackground,
+    tertiaryContainer = SteelContainer,
+    onTertiaryContainer = SteelOnContainer,
+    background = ChassisBackground,
+    onBackground = ChassisOnSurface,
+    surface = ChassisSurface,
+    onSurface = ChassisOnSurface,
+    surfaceVariant = ChassisSurfaceVariant,
+    onSurfaceVariant = ChassisOnSurfaceVariant,
+    surfaceContainer = ChassisSurface,
+    surfaceContainerHigh = ChassisSurfaceVariant,
+    outline = ChassisOutline,
+    outlineVariant = ChassisOutlineVariant,
+    error = WarningRed,
+    onError = ChassisBackground,
+    errorContainer = WarningContainer,
+    onErrorContainer = WarningRed,
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-)
-
+/**
+ * **El tema de la app: chasis oscuro con un acento ámbar.** La dirección y las alternativas
+ * descartadas están en CLAUDE.md §4.6.
+ *
+ * ⚠️ **No tiene parámetro `darkTheme` ni `dynamicColor`, y las dos ausencias son deliberadas.**
+ *
+ *  - **Siempre oscuro**: los tres colores de slot de efecto (verde/rojo/amarillo) son un hecho
+ *    del dispositivo y se eligieron para contrastar contra grafito. Una versión clara obligaría a
+ *    afinar un segundo juego —o a aceptar que en claro el amarillo se pierde—. Un panel de
+ *    instrumento no cambia de color con la hora del día.
+ *  - **Sin color dinámico**: hasta la Fase 3 estaba en `true`, así que en API ≥ 31 la paleta la
+ *    decidía **el fondo de pantalla** y la del proyecto no se usaba. Se retira el parámetro
+ *    entero en vez de dejarlo en `false`: un esquema derivado del wallpaper puede poner una
+ *    superficie amarillenta justo debajo de un slot amarillo, y un diseño donde tres tonos tienen
+ *    que seguir siendo inequívocos no puede delegar su paleta.
+ */
 @Composable
-fun KTNAControlTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
-) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
+fun KTNAControlTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = ChassisColorScheme,
         typography = Typography,
-        content = content
+        content = content,
     )
 }

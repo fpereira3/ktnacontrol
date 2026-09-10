@@ -6,11 +6,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +43,7 @@ import dev.alonx3.ktnacontrol.protocol.MemoryImage
 import dev.alonx3.ktnacontrol.protocol.ModFxType
 import dev.alonx3.ktnacontrol.protocol.tsl.TslUnavailable
 import dev.alonx3.ktnacontrol.protocol.PresetSave
+import dev.alonx3.ktnacontrol.ui.theme.Spacing
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,9 +77,31 @@ fun LibraryPane(
      * nada. Ver [PresetSendControls].
      */
     sendToAmp: PresetSendControls? = null,
+    /**
+     * Lo que se pinta **encima de la lista, dentro del mismo scroll** — hoy, el bloque en vivo de
+     * [PresetsScreen] (guardar en canal, exportar) con su encabezado.
+     *
+     * ⚠️ **Es una ranura y no un `Column` en el llamador, y esa es justo la corrección**
+     * (QA 2026-09-09, A.3: "la Biblioteca no aparece / no se encuentra"). Antes `PresetsScreen`
+     * apilaba el bloque en vivo y luego llamaba a esta pantalla con `Modifier.weight(1f)`. En una
+     * `Column` de Compose, un hijo con `weight` recibe **lo que sobre** después de medir a los que
+     * no la tienen — y si no sobra nada, recibe **altura cero**. El bloque en vivo no tenía tope
+     * ni scroll propio, así que en cuanto la pantalla era corta o la escala de fuente grande, se
+     * comía el hueco entero y la Biblioteca desaparecía sin dejar rastro: nada que ver y nada que
+     * desplazar, porque el contenedor de fuera tampoco hacía scroll.
+     *
+     * Metiéndolo aquí hay **un solo contenedor con scroll** para toda la pantalla, así que el
+     * bloque en vivo empuja la lista hacia abajo en vez de borrarla, y siempre se llega.
+     *
+     * Se pinta solo en modo lista: con un preset abierto esta pantalla ocupa el ancho entero y
+     * vuelve antes de llegar aquí, que es exactamente lo que el llamador quería decir con su
+     * antiguo `browsingLibrary`.
+     */
+    header: @Composable ColumnScope.() -> Unit = {},
 ) {
     var creatingPreset by rememberSaveable { mutableStateOf(false) }
     val entries by viewModel.entries.collectAsStateWithLifecycle()
+    val loading by viewModel.loading.collectAsStateWithLifecycle()
     val opened by viewModel.opened.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
@@ -120,9 +145,13 @@ fun LibraryPane(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .knobAwareVerticalScroll()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .knobAwareVerticalScroll(),
     ) {
+        // Fuera del padding lateral de la lista: el bloque en vivo trae el suyo, y compartirlo
+        // le pondría el doble.
+        header()
+
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -173,22 +202,31 @@ fun LibraryPane(
             }
         }
 
-        if (entries.isEmpty()) {
-            Text(
+        // ⚠️ `entries.isEmpty()` no bastaba: era igual de cierto "todavía no leí nada" que "leí
+        // y no hay nada". `libraryListStateOf` distingue las dos (CLAUDE.md §4.7, Fase 4).
+        when (val listState = libraryListStateOf(loading, entries)) {
+            LibraryListState.Loading -> Text(
+                text = stringResource(R.string.library_loading),
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            LibraryListState.Empty -> Text(
                 text = stringResource(R.string.library_empty),
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            return@Column
-        }
 
-        entries.forEach { entry ->
-            LibraryEntryCard(
-                entry = entry,
-                onOpen = { index -> viewModel.onPresetOpened(entry, index) },
-                onEdit = { index -> viewModel.onEditPreset(entry, index) },
-                onDelete = { viewModel.onDeleteEntry(entry) },
-            )
+            is LibraryListState.Loaded -> listState.entries.forEach { entry ->
+                LibraryEntryCard(
+                    entry = entry,
+                    onOpen = { index -> viewModel.onPresetOpened(entry, index) },
+                    onEdit = { index -> viewModel.onEditPreset(entry, index) },
+                    onDelete = { viewModel.onDeleteEntry(entry) },
+                )
+            }
+        }
         }
     }
 }
@@ -228,6 +266,14 @@ private fun LibraryEntryCard(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        // ⚠️ Fase 5 (CLAUDE.md §4.9): es el único área táctil hecha a mano del
+                        // proyecto —todo lo demás es `Button`/`TextButton`/`NavigationBarItem`,
+                        // que Material 3 ya garantiza en 48 dp por su cuenta—. Sin este mínimo
+                        // explícito, la altura de esta fila dependía de un efecto lateral (que
+                        // el `TextButton` de "Editar" de dentro empujara la fila hasta los 48 dp
+                        // él solo); ponerlo aquí la hace cierta por diseño, no por casualidad de
+                        // qué haya al lado.
+                        .heightIn(min = MIN_TOUCH_TARGET)
                         .clickable { onOpen(index) }
                         .padding(vertical = 4.dp),
                 ) {
@@ -393,7 +439,6 @@ private fun ReadOnlyLevel(labelRes: Int, value: Int?) {
         level = value,
         enabled = false,
         onLevelChanged = {},
-        onRead = {},
     )
 }
 
@@ -524,6 +569,13 @@ private fun PresetEditorScreen(
                 style = MaterialTheme.typography.titleSmall,
             )
         }
+        // ⚠️ Mismo trato que en la vista de solo lectura ([PresetDetail]), y no solo en el
+        // diálogo previo al envío: los bloques en disputa (Contour, GafcExp1AsgnMinMax) siguen
+        // sin cargar mientras se edita, así que quien edite tiene que verlo aquí también, no
+        // enterarse recién al intentar mandarlo al amplificador.
+        session.source?.unavailable?.takeIf { it.isNotEmpty() }?.let { items ->
+            UnavailableSection(items, modifier = Modifier.padding(horizontal = 16.dp))
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -582,18 +634,24 @@ private fun PresetEditorScreen(
         }
 
         saving?.let { asNewFile ->
+            // Sobrescribir un fichero de la biblioteca se avisa; no es destructivo sobre el
+            // amplificador, pero sí pisa un preset que el usuario tenía guardado.
+            val overwriteTarget = session.origin.takeIf { !asNewFile }
             PresetNameDialog(
                 title = stringResource(
                     if (asNewFile) R.string.library_save_as else R.string.library_save
                 ),
                 initialName = name,
-                confirmLabel = stringResource(R.string.library_save),
-                // Sobrescribir un fichero de la biblioteca se avisa; no es destructivo sobre el
-                // amplificador, pero sí pisa un preset que el usuario tenía guardado.
-                warning = if (!asNewFile && session.origin != null) {
-                    stringResource(R.string.library_overwrite_warning, session.origin.fileName)
-                } else {
-                    null
+                // ⚠️ Este diálogo sigue siendo de un solo paso a propósito (CLAUDE.md §4.7): no
+                // se le añade una segunda confirmación. Lo único que se homologa con "Guardar en
+                // canal" y "Enviar al amplificador" es el **verbo** del botón cuando de verdad
+                // se está pisando algo — "Sí, sobrescribir" en vez de "Guardar" a secas.
+                confirmLabel = stringResource(
+                    if (overwriteTarget != null) R.string.library_save_overwrite_action
+                    else R.string.library_save
+                ),
+                warning = overwriteTarget?.let {
+                    stringResource(R.string.library_overwrite_warning, it.fileName)
                 },
                 onConfirm = { chosen ->
                     saving = null
@@ -619,11 +677,12 @@ private fun PresetEditorScreen(
  * selector de canal— tras un `if (!offline)`, así que su rama offline eran exactamente estas tres
  * llamadas. Al escribirlas aquí desaparecen de paso una docena de argumentos inertes que solo
  * existían para satisfacer a la mitad en vivo (`state`, `editMode`, `onSavePreset`, el
- * `OFFLINE_DIAGNOSTICS` de relleno y los `onRead… = {}`).
+ * `OFFLINE_DIAGNOSTICS` de relleno y los `onRead… = {}`, que ya no existen).
  *
  * ⚠️ **`canEdit = true` siempre, y no es un descuido**: offline no hay contrato de Edit Mode que
  * aplicar (§4.2) — no hay amplificador que confirme ni que deje de confirmar, y lo que se edita es
- * un fichero en RAM. Los GET no se ofrecen (`onRead… = {}`) por la misma razón: no hay a quién
+ * un fichero en RAM. El GET tampoco se ofrece —el botón vive solo en las pantallas en vivo
+ * (2026-09-10)— por la misma razón: no hay a quién
  * preguntarle, y el valor ya está en la imagen.
  *
  * Vive aquí, privado, y no suelto en `ui/screens/`: lo que merece estar suelto es lo que se
@@ -646,19 +705,11 @@ private fun PresetEditorBody(session: LibraryViewModel.EditingSession) {
     AmpSection(
         levels = state.levels,
         selectors = state.selectors,
-        variationApplies = state.variationApplies,
-        ampSoloLevel = state.ampSoloLevel,
+        variation = state.variation,
         canEdit = true,
         onLevelChanged = session.editor::onLevelChanged,
-        onReadLevelClicked = {},
         onSelectorChanged = session.editor::onSelectorChanged,
         onAmpVariationChanged = session.editor::onAmpVariationChanged,
-        onAmpSoloLevelChanged = session.editor::onAmpSoloLevelChanged,
-        onReadAmpSoloLevelClicked = {},
-        // Sin amplificador no hay diagnóstico que valga: pregunta cosas que solo el hardware
-        // puede contestar. `null` lo oculta — antes hacía falta un objeto entero de callbacks
-        // vacíos para lo mismo.
-        diagnostics = null,
     )
 
     Spacer(modifier = Modifier.height(8.dp))
@@ -669,38 +720,37 @@ private fun PresetEditorBody(session: LibraryViewModel.EditingSession) {
         effectTypes = state.effectTypes,
         canEdit = true,
         onLevelChanged = session.editor::onLevelChanged,
-        onReadLevelClicked = {},
         onEffectColorChanged = session.editor::onEffectColorChanged,
         onEffectEnabledChanged = session.editor::onEffectEnabledChanged,
         onEffectTypeChanged = session.editor::onEffectTypeChanged,
         boosterParams = state.boosterParams,
         boosterSoloEnabled = state.boosterSoloEnabled,
         onBoosterParamChanged = session.editor::onBoosterParamChanged,
-        onReadBoosterParamClicked = {},
         onBoosterSoloEnabledChanged = session.editor::onBoosterSoloEnabledChanged,
         delayParams = state.delayParams,
         reverbParams = state.reverbParams,
         selectors = state.selectors,
         onSelectorChanged = session.editor::onSelectorChanged,
         onDelayParamChanged = session.editor::onDelayParamChanged,
-        onReadDelayParamClicked = {},
         onReverbParamChanged = session.editor::onReverbParamChanged,
-        onReadReverbParamClicked = {},
         reverbTime = state.reverbTime,
         onReverbTimeChanged = session.editor::onReverbTimeChanged,
-        onReadReverbTimeClicked = {},
         modChorusPreDelayLow = state.modChorusPreDelayLow,
         modChorusPreDelayHigh = state.modChorusPreDelayHigh,
         onModChorusPreDelayLowChanged = session.editor::onModChorusPreDelayLowChanged,
-        onReadModChorusPreDelayLowClicked = {},
         onModChorusPreDelayHighChanged = session.editor::onModChorusPreDelayHighChanged,
-        onReadModChorusPreDelayHighClicked = {},
         modInternalRaw = state.modInternalRaw,
         fxInternalRaw = state.fxInternalRaw,
         onModParamChanged = session.editor::onModParamChanged,
-        onReadModParamClicked = { _, _ -> },
         onFxParamChanged = session.editor::onFxParamChanged,
-        onReadFxParamClicked = { _, _ -> },
+        // Solo se mudó a la sección de efectos (QA 2026-09-09, bloque C). Offline sigue siendo
+        // editable igual: es un parámetro más de la imagen.
+        ampSoloLevel = state.ampSoloLevel,
+        onAmpSoloLevelChanged = session.editor::onAmpSoloLevelChanged,
+        // Sin amplificador no hay diagnóstico que valga: pregunta cosas que solo el hardware
+        // puede contestar. `null` lo oculta — antes hacía falta un objeto entero de callbacks
+        // vacíos para lo mismo.
+        diagnostics = null,
     )
 
     Spacer(modifier = Modifier.height(8.dp))
@@ -714,12 +764,9 @@ private fun PresetEditorBody(session: LibraryViewModel.EditingSession) {
         canEdit = true,
         onSelectorChanged = session.editor::onSelectorChanged,
         onParamChanged = session.editor::onNoPanelParamChanged,
-        onReadParam = {},
         onContourShapeChanged = session.editor::onContourShapeChanged,
         onContourFreqShiftChanged = session.editor::onContourFreqShiftChanged,
-        onReadContourSlot = {},
         onEqParamChanged = session.editor::onEqParamChanged,
-        onReadEqParam = { _, _ -> },
     )
     }
 }
@@ -757,6 +804,10 @@ internal fun PresetNameDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 warning?.let {
+                    // Mismo tono de aviso que "Guardar en canal" y "Enviar al amplificador":
+                    // color de error y un pequeño margen antes, no pegado al campo de texto
+                    // (CLAUDE.md §4.7).
+                    Spacer(modifier = Modifier.height(Spacing.xs))
                     Text(
                         text = it,
                         style = MaterialTheme.typography.bodySmall,
@@ -830,24 +881,14 @@ private fun SendToAmpSection(
             onCancel = controls.onCancel,
         )
 
-        is PresetSendState.Confirm -> AlertDialog(
-            onDismissRequest = controls.onCancel,
-            title = {
-                Text(stringResource(R.string.library_send_confirm_title, step.request.name))
-            },
-            text = {
-                Text(stringResource(R.string.library_send_confirm_body, step.plan.messageCount))
-            },
-            confirmButton = {
-                TextButton(onClick = controls.onConfirmed) {
-                    Text(stringResource(R.string.library_send_confirm_action))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = controls.onBack) {
-                    Text(stringResource(R.string.dialog_back))
-                }
-            },
+        // Mismo aspecto que el paso final de "Guardar en canal" — ver DestructiveConfirmDialog
+        // en Controls.kt y CLAUDE.md §4.7.
+        is PresetSendState.Confirm -> DestructiveConfirmDialog(
+            title = stringResource(R.string.library_send_confirm_title, step.request.name),
+            body = stringResource(R.string.library_send_confirm_body, step.plan.messageCount),
+            confirmLabel = stringResource(R.string.library_send_confirm_action),
+            onConfirm = controls.onConfirmed,
+            onBack = controls.onBack,
         )
 
         is PresetSendState.Finished -> AlertDialog(
@@ -899,7 +940,7 @@ private fun SendReviewDialog(
                     }
                 )
                 if (plan.skipped.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(Spacing.sm))
                     Text(
                         text = stringResource(
                             R.string.library_send_review_skipped_title,
@@ -984,3 +1025,9 @@ private fun sendOutcomeText(finished: PresetSendState.Finished): String {
             stringResource(R.string.library_send_result_cancelled)
     }
 }
+
+/**
+ * El mínimo de área táctil recomendado por Android (48×48 dp) — no viene de ningún cálculo, es
+ * la cifra de siempre de las guías de accesibilidad de la plataforma. Fase 5, CLAUDE.md §4.9.
+ */
+private val MIN_TOUCH_TARGET = 48.dp

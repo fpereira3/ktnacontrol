@@ -45,6 +45,40 @@ object AmpDomain {
      */
     val LEVELS: List<LevelId> = LevelId.entries - EffectId.entries.map { it.level }.toSet()
 
+    /**
+     * **El orden en que se pintan los seis niveles del panel**, que a propósito **no** es el de
+     * [LEVELS].
+     *
+     * [LEVELS] es una resta sobre `LevelId.entries` (§4.2), así que su orden es el del enum —el
+     * del **mapa de direcciones**, `06 51`..`06 56`— y eso pone Gain y Volume delante de la
+     * ecualización. Con la tira paginada de tres en tres, ese orden parte los controles por donde
+     * no se usan: la primera página quedaría `Gain · Volume · Bass` y la segunda
+     * `Middle · Treble · Presence`, con el **medio de la ecualización cortado entre dos páginas**.
+     *
+     * ✅ Con este orden cada página es un grupo que se toca junto:
+     *
+     * | Página | Controles | Qué es |
+     * | --- | --- | --- |
+     * | 1 | `BASS · MIDDLE · TREBLE` | la ecualización, que se ajusta **comparando las tres** |
+     * | 2 | `GAIN · VOLUME · PRESENCE` | cuánto satura, cuánto suena y el brillo de arriba |
+     *
+     * ⚠️ **Y por eso esta tira fija sus columnas en 3** en vez de derivarlas del ancho como el
+     * resto (`ControlPaging`): aquí el reparto **significa algo**, y en una pantalla ancha —donde
+     * caben 5 o 6— las dos tríadas se fundirían en una fila sin agrupación. Es una excepción
+     * deliberada a la decisión 2 del bloque C, no un descuido; ver [AmpSection].
+     *
+     * El `init` de abajo exige que sea una **permutación exacta** de [LEVELS]: añadir un nivel de
+     * panel sin ponerlo aquí falla al cargar la clase, no en silencio en la pantalla.
+     */
+    val PANEL_LEVEL_ORDER: List<LevelId> = listOf(
+        LevelId.BASS,
+        LevelId.MIDDLE,
+        LevelId.TREBLE,
+        LevelId.GAIN,
+        LevelId.VOLUME,
+        LevelId.PRESENCE,
+    )
+
     /** Los niveles de los cinco efectos, el complemento exacto de [LEVELS]. */
     val EFFECT_LEVELS: List<LevelId> = EffectId.entries.map { it.level }
 
@@ -60,7 +94,6 @@ object AmpDomain {
         SelectorId.AMP_CATEGORY,
         SelectorId.AMP_TYPE,
         SelectorId.AMP_VARIATION,
-        SelectorId.AMP_SOLO,
         SelectorId.NOISE_GATE,
         SelectorId.CONTOUR,
         SelectorId.CONTOUR_SELECT,
@@ -77,6 +110,20 @@ object AmpDomain {
 
     /** Selectores que pertenecen a un efecto: viven en su tarjeta, nunca en la pantalla de amp. */
     val EFFECT_SELECTORS: List<SelectorId> = listOf(
+        /**
+         * ⚠️ **Solo cambió de dominio el 2026-09-09** (QA, bloque C): era del amplificador y
+         * ahora es una tarjeta más de [EffectsSection], después de Reverb.
+         *
+         * El criterio es el mismo que reparte todo lo demás: **qué trata el control, no dónde
+         * estaba**. Solo no ajusta el amplificador —no es una perilla del panel, ni el EQ, ni por
+         * dónde pasa la señal—: es un realce conmutable con su propio nivel y (documentado, aún
+         * sin cablear) su propio ecualizador. Eso es exactamente la forma de un efecto, y en el
+         * amplificador era un huérfano en medio de Gain/Volume/Bass.
+         *
+         * Y hay un segundo argumento, de uso: Solo se pisa a la vez que Booster, no a la vez que
+         * el modelo de amplificador.
+         */
+        SelectorId.AMP_SOLO,
         SelectorId.DELAY_HIGH_CUT,
         SelectorId.REVERB_LOW_CUT,
         SelectorId.REVERB_HIGH_CUT,
@@ -107,4 +154,13 @@ object AmpDomain {
     /** A qué pantalla pertenece [id]. Un nivel es de efecto o del amplificador, sin más. */
     fun domainOf(id: LevelId): ControlDomain =
         if (id in EFFECT_LEVELS) ControlDomain.EFFECT else ControlDomain.AMP
+
+    init {
+        // Una reordenación a mano que se deje un nivel fuera —o que repita uno— haría desaparecer
+        // un control del panel **sin ningún error**: la pantalla simplemente pintaría cinco. Que
+        // reviente al cargar la clase es lo barato.
+        require(PANEL_LEVEL_ORDER.toSet() == LEVELS.toSet() && PANEL_LEVEL_ORDER.size == LEVELS.size) {
+            "PANEL_LEVEL_ORDER debe ser una permutación exacta de LEVELS: $PANEL_LEVEL_ORDER vs $LEVELS"
+        }
+    }
 }

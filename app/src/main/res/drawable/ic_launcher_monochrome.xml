@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  La capa monocroma de los íconos temáticos de Android 13+.
+
+  ⚠️ **No puede ser la misma que `ic_launcher_foreground`**: el sistema la reteñe entera con un
+  color plano, así que el cuerpo gris de la perilla taparía el arco y quedaría un disco liso. Aquí
+  solo van las líneas —arco y aguja—, que es lo que sobrevive a un reteñido.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:pathData="M38.44,69.56 A22,22 0 1 1 69.56,69.56"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,54 L66,42"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M46,54 A8,8 0 1 1 62,54 A8,8 0 1 1 46,54z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3" />
+</vector>

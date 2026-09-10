@@ -22,16 +22,26 @@ enum class LevelId(
     @param:StringRes val labelRes: Int,
     /** Plain name for the diagnostics log, which is written in Spanish. */
     val logName: String,
+    /**
+     * Solo el nombre, sin el valor: lo que cabe bajo una barra vertical de 80 dp
+     * (QA 2026-09-09, bloque C).
+     *
+     * ⚠️ **Va aparte de [labelRes] y no se deriva de él.** `labelRes` es un formato con el valor
+     * dentro ("Drive: 42"); quitarle el valor a mano dejaría restos ("Time:  s" en los que
+     * llevan unidad). Dos recursos distintos porque son dos textos distintos, no dos formas del
+     * mismo.
+     */
+    @param:StringRes val shortLabelRes: Int,
 ) {
-    GAIN(R.string.debug_connection_gain_level, "gain"),
-    VOLUME(R.string.debug_connection_volume_level, "volume"),
-    BASS(R.string.debug_connection_bass_level, "bass"),
-    MIDDLE(R.string.debug_connection_middle_level, "middle"),
-    TREBLE(R.string.debug_connection_treble_level, "treble"),
-    PRESENCE(R.string.debug_connection_presence_level, "presence"),
-    BOOST(R.string.debug_connection_boost_level, "boost"),
-    MOD(R.string.debug_connection_mod_level, "mod"),
-    FX(R.string.debug_connection_fx_level, "fx"),
-    DELAY(R.string.debug_connection_delay_level, "delay"),
-    REVERB(R.string.debug_connection_reverb_level, "reverb"),
+    GAIN(R.string.debug_connection_gain_level, "gain", R.string.short_gain),
+    VOLUME(R.string.debug_connection_volume_level, "volume", R.string.short_volume),
+    BASS(R.string.debug_connection_bass_level, "bass", R.string.short_bass),
+    MIDDLE(R.string.debug_connection_middle_level, "middle", R.string.short_middle),
+    TREBLE(R.string.debug_connection_treble_level, "treble", R.string.short_treble),
+    PRESENCE(R.string.debug_connection_presence_level, "presence", R.string.short_presence),
+    BOOST(R.string.debug_connection_boost_level, "boost", R.string.short_boost),
+    MOD(R.string.debug_connection_mod_level, "mod", R.string.short_mod),
+    FX(R.string.debug_connection_fx_level, "fx", R.string.short_fx),
+    DELAY(R.string.debug_connection_delay_level, "delay", R.string.short_delay),
+    REVERB(R.string.debug_connection_reverb_level, "reverb", R.string.short_reverb),
 }
